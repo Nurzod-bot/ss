@@ -10,51 +10,67 @@ import {
   ChevronLeft,
   ChevronRight,
   CircleHelp,
-  Clock3,
-  Coffee,
-  Ellipsis,
-  Flower2,
-  Focus,
-  Leaf,
-  ListTodo,
+  Code2,
+  Crosshair,
+  Dumbbell,
+  Flame,
+  FlaskConical,
+  Languages,
+  ListChecks,
   Menu,
   MoreHorizontal,
   Pause,
   Pencil,
+  Pill,
+  Plane,
   Play,
   Plus,
+  Repeat2,
   RotateCcw,
   Settings2,
-  Sparkles,
-  Sun,
+  ShieldCheck,
+  Target,
   Trash2,
   X,
+  Zap,
   type LucideIcon,
 } from "lucide-react";
 import {
   CATEGORIES,
-  clock,
+  completedStreak,
   dateKey,
-  duration,
+  FOCUS_SECONDS,
   fromKey,
+  habitsForDate,
+  isActive,
+  LEGACY_STORAGE_KEY,
   loadData,
-  meridiem,
-  minutes,
-  plannedMinutes,
-  readableDuration,
   shiftDate,
   STORAGE_KEY,
+  toggleCompletion,
   weekDates,
   type Category,
+  type DayHabit,
+  type Habit,
+  type HabitIcon,
   type PlannerData,
-  type Task,
 } from "./model";
 
-const categoryIcons: Record<Category, LucideIcon> = {
-  Focus,
-  Work: Coffee,
-  Personal: BookOpen,
-  Wellness: Leaf,
+const habitIcons: Record<HabitIcon, LucideIcon> = {
+  capsule: Pill,
+  flask: FlaskConical,
+  dumbbell: Dumbbell,
+  language: Languages,
+  code: Code2,
+  book: BookOpen,
+  check: CheckCheck,
+};
+const categoryIcons: Record<Category, HabitIcon> = {
+  Health: "capsule",
+  Training: "dumbbell",
+  Learning: "language",
+  Focus: "code",
+  Personal: "book",
 };
 const longDate = (key: string) =>
   fromKey(key).toLocaleDateString("en-US", {
@@ -62,6 +78,8 @@ const longDate = (key: string) =>
     month: "long",
     day: "numeric",
   });
+const shortDate = (key: string) =>
+  fromKey(key).toLocaleDateString("en-US", { month: "short", day: "numeric" });
 
 function Dialog({
   title,
@@ -92,7 +110,7 @@ function Dialog({
     >
       <div className="dialog-heading">
         <div>
-          <p className="eyebrow">A LITTLE MORE INTENTIONAL</p>
+          <p className="eyebrow">YOUR DAILY FLIGHT PLAN</p>
           <h2 id="dialog-title">{title}</h2>
           {description && <p className="muted">{description}</p>}
         </div>
@@ -196,69 +214,26 @@ function MiniCalendar({
   );
 }
 
-function PlantIllustration() {
-  return (
-    <svg
-      className="plant-illustration"
-      viewBox="0 0 260 142"
-      fill="none"
-      aria-hidden="true"
-    >
-      <circle cx="130" cy="76" r="58" fill="#e2e8d8" />
-      <circle cx="182" cy="30" r="14" fill="#e9d7a4" opacity=".8" />
-      <path
-        d="M42 120c24-8 41-6 59-1m60 0c22-6 39-6 61 1"
-        stroke="#c7d1b9"
-        strokeWidth="1.5"
-        strokeLinecap="round"
-      />
-      <path
-        d="M126 105c-3-33 0-51 12-77m-8 58c-11-6-22-17-27-33m28 21c10-5 21-14 25-29"
-        stroke="#718466"
-        strokeWidth="2"
-        strokeLinecap="round"
-      />
-      <path d="M133 55c-2-17 2-27 15-31 4 15-2 26-15 31Z" fill="#718466" />
-      <path d="M122 76c-18-1-29-12-29-27 16 2 26 11 29 27Z" fill="#93a284" />
-      <path d="M130 84c2-19 13-30 30-30-2 17-12 28-30 30Z" fill="#b2be9d" />
-      <path d="M126 95c-16-1-26-9-30-22 16 0 27 8 30 22Z" fill="#718466" />
-      <path d="M109 103h36l-5 28h-26l-5-28Z" fill="#d2b89a" />
-      <path d="M109 103h36v5h-36z" fill="#c6a98a" />
-      <path
-        d="M118 112l2 15m8-15v15m9-15-2 15"
-        stroke="#b89574"
-        strokeWidth="1"
-        opacity=".5"
-      />
-      <path
-        d="M65 67v8m-4-4h8m116 27v8m-4-4h8"
-        stroke="#9aaa88"
-        strokeLinecap="round"
-      />
-      <circle cx="180" cy="65" r="2" fill="#9aaa88" />
-      <circle cx="79" cy="101" r="2" fill="#9aaa88" />
-    </svg>
-  );
-}
-
-function TaskCard({
-  task,
+function HabitCard({
+  habit,
+  index,
   onToggle,
   onEdit,
   onDelete,
 }: {
-  task: Task;
+  habit: DayHabit;
+  index: number;
   onToggle: () => void;
   onEdit: () => void;
   onDelete: () => void;
 }) {
   const [menuOpen, setMenuOpen] = useState(false);
-  const ref = useRef<HTMLDivElement>(null);
-  const Icon = categoryIcons[task.category];
+  const menuRef = useRef<HTMLDivElement>(null);
+  const Icon = habitIcons[habit.icon];
   useEffect(() => {
     if (!menuOpen) return;
     const close = (e: MouseEvent) => {
-      if (!ref.current?.contains(e.target as Node)) setMenuOpen(false);
+      if (!menuRef.current?.contains(e.target as Node)) setMenuOpen(false);
     };
     const escape = (e: KeyboardEvent) => {
       if (e.key === "Escape") setMenuOpen(false);
@@ -271,151 +246,116 @@ function TaskCard({
     };
   }, [menuOpen]);
   return (
-    <div className={`timeline-row ${task.done ? "completed" : ""}`}>
-      <div className="time-label">
-        <strong>{clock(task.start)}</strong>
-        <span>{meridiem(task.start)}</span>
-      </div>
-      <div className="timeline-track">
-        <span />
-      </div>
-      <article className={`task-card category-${task.category.toLowerCase()}`}>
-        <button
-          className={`task-check ${task.done ? "checked" : ""}`}
-          onClick={onToggle}
-          aria-label={`${task.done ? "Mark incomplete" : "Mark complete"}: ${task.title}`}
-          role="checkbox"
-          aria-checked={task.done}
-        >
-          {task.done && <Check size={14} strokeWidth={2.7} />}
+    <article
+      className={`habit-card category-${habit.category.toLowerCase()} ${habit.done ? "completed" : ""}`}
+    >
+      <span className="habit-number">{String(index + 1).padStart(2, "0")}</span>
+      <span className="habit-icon">
+        <Icon size={21} strokeWidth={1.6} />
+      </span>
+      <div className="habit-content">
+        <button className="habit-title" onClick={onEdit}>
+          {habit.title}
         </button>
-        <div className="task-content">
-          <button className="task-title" onClick={onEdit}>
-            {task.title}
-          </button>
-          <p className="task-description">
-            {task.notes || "A little time for what matters."}
-          </p>
-          <div className="task-meta">
-            <span className="category-pill">
-              <Icon size={11} />
-              {task.category}
-            </span>
-            <span className="task-duration">
-              <Clock3 size={11} />
-              {clock(task.start)} – {clock(task.end)} {meridiem(task.end)}
-              <span className="meta-dot">·</span>
-              {readableDuration(duration(task))}
-            </span>
+        <p>{habit.notes || "One step forward, every day."}</p>
+      </div>
+      <span className="habit-category">{habit.category}</span>
+      <button
+        className={`habit-check ${habit.done ? "checked" : ""}`}
+        onClick={onToggle}
+        role="checkbox"
+        aria-checked={habit.done}
+        aria-label={`${habit.done ? "Mark incomplete" : "Mark complete"}: ${habit.title}`}
+      >
+        <Check size={15} strokeWidth={2.5} />
+      </button>
+      <div className="habit-menu" ref={menuRef}>
+        <button
+          className="icon-button"
+          onClick={() => setMenuOpen(!menuOpen)}
+          aria-label={`Options for ${habit.title}`}
+          aria-expanded={menuOpen}
+        >
+          <MoreHorizontal size={18} />
+        </button>
+        {menuOpen && (
+          <div className="dropdown" role="menu">
+            <button
+              role="menuitem"
+              onClick={() => {
+                setMenuOpen(false);
+                onEdit();
+              }}
+            >
+              <Pencil size={14} />
+              Edit habit
+            </button>
+            <button
+              className="danger"
+              role="menuitem"
+              onClick={() => {
+                setMenuOpen(false);
+                onDelete();
+              }}
+            >
+              <Trash2 size={14} />
+              Remove habit
+            </button>
           </div>
-        </div>
-        <div className="task-menu" ref={ref}>
-          <button
-            className="icon-button"
-            onClick={() => setMenuOpen(!menuOpen)}
-            aria-label={`Options for ${task.title}`}
-            aria-expanded={menuOpen}
-          >
-            <MoreHorizontal size={19} />
-          </button>
-          {menuOpen && (
-            <div className="dropdown" role="menu">
-              <button
-                role="menuitem"
-                onClick={() => {
-                  setMenuOpen(false);
-                  onEdit();
-                }}
-              >
-                <Pencil size={14} />
-                Edit task
-              </button>
-              <button
-                className="danger"
-                role="menuitem"
-                onClick={() => {
-                  setMenuOpen(false);
-                  onDelete();
-                }}
-              >
-                <Trash2 size={14} />
-                Delete task
-              </button>
-            </div>
-          )}
-        </div>
-      </article>
-    </div>
+        )}
+      </div>
+    </article>
   );
 }
 
-function TaskEditor({
-  task,
+function HabitEditor({
+  habit,
   selected,
-  tasks,
   onSave,
   onClose,
 }: {
-  task: Task | null;
+  habit: Habit | null;
   selected: string;
-  tasks: Task[];
-  onSave: (task: Task) => void;
+  onSave: (habit: Habit) => void;
   onClose: () => void;
 }) {
-  const [title, setTitle] = useState(task?.title ?? "");
-  const [date, setDate] = useState(task?.date ?? selected);
-  const [start, setStart] = useState(task?.start ?? "09:00");
-  const [end, setEnd] = useState(task?.end ?? "10:00");
-  const [category, setCategory] = useState<Category>(task?.category ?? "Focus");
-  const [notes, setNotes] = useState(task?.notes ?? "");
-  const [error, setError] = useState("");
-  const overlaps = tasks.filter(
-    (t) =>
-      t.id !== task?.id &&
-      t.date === date &&
-      minutes(t.start) < minutes(end) &&
-      minutes(t.end) > minutes(start),
+  const [title, setTitle] = useState(habit?.title ?? "");
+  const [category, setCategory] = useState<Category>(
+    habit?.category ?? "Focus",
   );
+  const [notes, setNotes] = useState(habit?.notes ?? "");
+  const [error, setError] = useState("");
   return (
     <Dialog
-      title={task ? "Make a little adjustment." : "Make time for something."}
-      description={
-        task
-          ? "Your plan can change with you."
-          : "Big plans or small moments. They all belong here."
-      }
+      title={habit ? "Refine your routine." : "Add a daily habit."}
+      description="No time slots. Just one more thing worth showing up for."
       onClose={onClose}
     >
       <form
         onSubmit={(e) => {
           e.preventDefault();
           if (!title.trim()) {
-            setError("Give your task a name.");
-            return;
-          }
-          if (minutes(end) <= minutes(start)) {
-            setError("Choose an end time after the start time.");
+            setError("Give your habit a name.");
             return;
           }
           onSave({
-            id: task?.id ?? crypto.randomUUID(),
-            date,
+            id: habit?.id ?? crypto.randomUUID(),
             title: title.trim(),
-            start,
-            end,
             category,
             notes: notes.trim(),
-            done: task?.done ?? false,
+            icon: habit?.icon ?? categoryIcons[category],
+            createdOn: habit ? habit.createdOn : selected,
+            archivedOn: habit?.archivedOn,
           });
         }}
       >
         <label className="field">
-          What’s the plan?
+          Habit name
           <input
             autoFocus
             required
             maxLength={120}
-            placeholder="e.g. A little time to create"
+            placeholder="Something to get better at"
             value={title}
             onChange={(e) => {
               setTitle(e.target.value);
@@ -423,50 +363,15 @@ function TaskEditor({
             }}
           />
         </label>
-        <label className="field">
-          Day
-          <input
-            type="date"
-            required
-            value={date}
-            onChange={(e) => setDate(e.target.value)}
-          />
-        </label>
-        <div className="form-row">
-          <label className="field">
-            Start time
-            <input
-              type="time"
-              required
-              value={start}
-              onChange={(e) => {
-                setStart(e.target.value);
-                setError("");
-              }}
-            />
-          </label>
-          <label className="field">
-            End time
-            <input
-              type="time"
-              required
-              value={end}
-              onChange={(e) => {
-                setEnd(e.target.value);
-                setError("");
-              }}
-            />
-          </label>
-        </div>
         <fieldset className="category-field">
-          <legend>A little category</legend>
+          <legend>Category</legend>
           <div className="category-options">
             {CATEGORIES.map((c) => {
-              const Icon = categoryIcons[c];
+              const Icon = habitIcons[categoryIcons[c]];
               return (
                 <button
-                  key={c}
                   type="button"
+                  key={c}
                   className={`category-option category-${c.toLowerCase()} ${category === c ? "active" : ""}`}
                   onClick={() => setCategory(c)}
                   aria-pressed={category === c}
@@ -479,23 +384,24 @@ function TaskEditor({
           </div>
         </fieldset>
         <label className="field">
-          A note <span className="optional">(optional)</span>
+          A reminder <span className="optional">(optional)</span>
           <textarea
-            rows={2}
+            rows={3}
             maxLength={500}
-            placeholder="Anything you’d like to remember…"
+            placeholder="A little motivation for your future self…"
             value={notes}
             onChange={(e) => setNotes(e.target.value)}
           />
         </label>
+        <p className="repeat-notice">
+          <Repeat2 size={15} />
+          {habit
+            ? "This updates your daily routine. Existing checkmarks stay saved."
+            : `Repeats every day from ${shortDate(selected)}. Checkmarks are separate for each day.`}
+        </p>
         {error && (
-          <p role="alert" className="form-error">
+          <p className="form-error" role="alert">
             {error}
-          </p>
-        )}
-        {!error && overlaps.length > 0 && minutes(end) > minutes(start) && (
-          <p className="form-notice">
-            This shares time with “{overlaps[0].title}”. You can still save it.
           </p>
         )}
         <div className="dialog-footer">
@@ -503,8 +409,8 @@ function TaskEditor({
             Cancel
           </button>
           <button className="button primary" type="submit">
-            <Check size={16} />
-            {task ? "Save changes" : "Add to my day"}
+            <Check size={15} />
+            {habit ? "Save changes" : "Add to routine"}
           </button>
         </div>
       </form>
@@ -517,11 +423,12 @@ export default function App() {
   const [data, setData] = useState<PlannerData>(loaded.data);
   const [storageWarning, setStorageWarning] = useState(loaded.warning);
   const [canPersist, setCanPersist] = useState(!loaded.warning);
-  const [selected, setSelected] = useState(() => dateKey(new Date()));
+  const [today, setToday] = useState(() => dateKey(new Date()));
+  const [selected, setSelected] = useState(today);
   const [view, setView] = useState<"day" | "week">("day");
-  const [filter, setFilter] = useState("All tasks");
+  const [filter, setFilter] = useState("All");
   const [editor, setEditor] = useState<{
-    task: Task | null;
+    habit: Habit | null;
     date: string;
   } | null>(null);
   const [dialog, setDialog] = useState<"notes" | "settings" | "help" | null>(
@@ -530,12 +437,12 @@ export default function App() {
   const [sidebarOpen, setSidebarOpen] = useState(false);
   const [toast, setToast] = useState<{
     message: string;
-    deleted?: Task;
+    removed?: Habit;
   } | null>(null);
   const [focusTask, setFocusTask] = useState("");
-  const [remaining, setRemaining] = useState(data.focusMinutes * 60);
+  const [remaining, setRemaining] = useState(FOCUS_SECONDS);
   const [deadline, setDeadline] = useState<number | null>(null);
-  const notesRef = useRef<HTMLTextAreaElement>(null);
+  const completedDeadline = useRef<number | null>(null);
 
   useEffect(() => {
     if (!canPersist) return;
@@ -544,7 +451,7 @@ export default function App() {
       setStorageWarning(null);
     } catch {
       setStorageWarning(
-        "Browser storage is unavailable. Export your plan to keep a copy before closing this tab.",
+        "Browser storage is unavailable. Export your plan before closing this tab.",
       );
     }
   }, [data, canPersist]);
@@ -554,9 +461,20 @@ export default function App() {
     return () => window.clearTimeout(id);
   }, [toast]);
   useEffect(() => {
-    setRemaining(data.focusMinutes * 60);
-    setDeadline(null);
-  }, [data.focusMinutes]);
+    const update = () => {
+      const next = dateKey(new Date());
+      if (next !== today) {
+        setToday(next);
+        setSelected((current) => (current === today ? next : current));
+      }
+    };
+    const id = window.setInterval(update, 15000);
+    document.addEventListener("visibilitychange", update);
+    return () => {
+      window.clearInterval(id);
+      document.removeEventListener("visibilitychange", update);
+    };
+  }, [today]);
   useEffect(() => {
     if (deadline === null) return;
     const tick = () => {
@@ -564,9 +482,18 @@ export default function App() {
       setRemaining(left);
       if (left === 0) {
         setDeadline(null);
-        setToast({
-          message: "Focus session complete. Take a well-earned breath.",
-        });
+        if (completedDeadline.current !== deadline) {
+          completedDeadline.current = deadline;
+          const day = dateKey(new Date());
+          setData((prev) => ({
+            ...prev,
+            focusSessions: {
+              ...prev.focusSessions,
+              [day]: (prev.focusSessions[day] ?? 0) + 1,
+            },
+          }));
+          setToast({ message: "30 minutes, well spent. Take a breather." });
+        }
       }
     };
     tick();
@@ -588,92 +515,98 @@ export default function App() {
         !e.altKey
       ) {
         e.preventDefault();
-        setEditor({ task: null, date: selected });
+        setEditor({ habit: null, date: selected });
       }
     };
     window.addEventListener("keydown", handler);
     return () => window.removeEventListener("keydown", handler);
   }, [selected]);
 
-  const today = dateKey(new Date());
-  const dayTasks = data.tasks
-    .filter((t) => t.date === selected)
-    .sort((a, b) => a.start.localeCompare(b.start));
-  const completed = dayTasks.filter((t) => t.done).length;
-  const progress = dayTasks.length
-    ? Math.round((completed / dayTasks.length) * 100)
+  const dayHabits = habitsForDate(data, selected);
+  const completed = dayHabits.filter((h) => h.done).length;
+  const progress = dayHabits.length
+    ? Math.round((completed / dayHabits.length) * 100)
     : 0;
-  const planned = plannedMinutes(dayTasks);
-  const filteredTasks = dayTasks.filter(
-    (t) =>
-      filter === "All tasks" ||
-      (filter === "Completed"
-        ? t.done
-        : filter === "To do"
-          ? !t.done
-          : t.category === filter),
+  const visibleHabits = dayHabits.filter(
+    (h) => filter === "All" || (filter === "To do" ? !h.done : h.done),
   );
   const dates = weekDates(selected);
+  const weekHabits = data.habits.filter((h) =>
+    dates.some((d) => isActive(h, d)),
+  );
   const note = data.notes[selected] ?? "";
+  const streak = completedStreak(data, today);
   const setNote = (value: string) =>
     setData((prev) => ({
       ...prev,
       notes: { ...prev.notes, [selected]: value },
     }));
-  const toggle = (id: string) =>
-    setData((prev) => ({
-      ...prev,
-      tasks: prev.tasks.map((t) => (t.id === id ? { ...t, done: !t.done } : t)),
-    }));
-  const deleteTask = (task: Task) => {
-    setData((prev) => ({
-      ...prev,
-      tasks: prev.tasks.filter((t) => t.id !== task.id),
-    }));
-    setToast({
-      message: "Task removed. A little more breathing room.",
-      deleted: task,
-    });
-  };
   const chooseDay = (key: string) => {
     setSelected(key);
     setView("day");
     setSidebarOpen(false);
   };
-  const saveTask = (task: Task) => {
+  const toggle = (id: string, date = selected) =>
+    setData((prev) => toggleCompletion(prev, date, id));
+  const saveHabit = (habit: Habit) => {
     setData((prev) => ({
       ...prev,
-      tasks: prev.tasks.some((t) => t.id === task.id)
-        ? prev.tasks.map((t) => (t.id === task.id ? task : t))
-        : [...prev.tasks, task],
+      habits: prev.habits.some((h) => h.id === habit.id)
+        ? prev.habits.map((h) => (h.id === habit.id ? habit : h))
+        : [...prev.habits, habit],
     }));
-    setSelected(task.date);
-    setFilter("All tasks");
+    setFilter("All");
     setEditor(null);
     setToast({
-      message: editor?.task
-        ? "Your plan has been updated."
-        : "A little intention, added to your day.",
+      message: editor?.habit
+        ? "Routine updated. Keep showing up."
+        : "A new habit on your flight plan.",
+    });
+  };
+  const removeHabit = (habit: Habit) => {
+    setData((prev) => ({
+      ...prev,
+      habits: prev.habits.map((h) =>
+        h.id === habit.id ? { ...h, archivedOn: selected } : h,
+      ),
+    }));
+    setToast({
+      message: "Removed from this day forward. Past progress is kept.",
+      removed: habit,
     });
   };
   const exportPlan = () => {
-    const blob = new Blob(
-      [
-        JSON.stringify(
-          { ...data, exportedAt: new Date().toISOString() },
-          null,
-          2,
-        ),
-      ],
-      { type: "application/json" },
+    const url = URL.createObjectURL(
+      new Blob(
+        [
+          JSON.stringify(
+            { ...data, focusMinutes: 30, exportedAt: new Date().toISOString() },
+            null,
+            2,
+          ),
+        ],
+        { type: "application/json" },
+      ),
     );
-    const url = URL.createObjectURL(blob);
     const a = document.createElement("a");
     a.href = url;
     a.download = `daylight-plan-${today}.json`;
     a.click();
     window.setTimeout(() => URL.revokeObjectURL(url), 1000);
-    setToast({ message: "Your plan has been exported." });
+    setToast({ message: "Your plan is exported. Keep it somewhere safe." });
+  };
+  const recoverStorage = () => {
+    try {
+      for (const key of [STORAGE_KEY, LEGACY_STORAGE_KEY]) {
+        const raw = localStorage.getItem(key);
+        if (raw) localStorage.setItem(`${key}-recovery-${Date.now()}`, raw);
+      }
+      setCanPersist(true);
+    } catch {
+      setStorageWarning(
+        "Could not back up your old data. Browser storage may be full.",
+      );
+    }
   };
 
   return (
@@ -696,14 +629,12 @@ export default function App() {
           aria-label="Daylight home"
         >
           <span className="brand-icon">
-            <Sun size={30} strokeWidth={1.6} />
+            <Plane size={23} strokeWidth={1.7} />
           </span>
-          <span>
-            daylight<span className="brand-dot">.</span>
-          </span>
+          daylight<span className="brand-dot">.</span>
         </a>
-        <p className="brand-tagline">A little more intentional.</p>
-        <p className="nav-label">YOUR SPACE</p>
+        <p className="brand-tagline">YOUR EVERYDAY, ELEVATED.</p>
+        <p className="nav-label">FLIGHT DECK</p>
         <nav className="main-nav" aria-label="Main navigation">
           <button
             className={view === "day" ? "active" : ""}
@@ -712,8 +643,8 @@ export default function App() {
               setSidebarOpen(false);
             }}
           >
-            <ListTodo size={18} />
-            <span>My day</span>
+            <ListChecks size={18} />
+            <span>Daily checklist</span>
             {view === "day" && <span className="nav-active-dot" />}
           </button>
           <button
@@ -724,8 +655,7 @@ export default function App() {
             }}
           >
             <CalendarDays size={18} />
-            <span>My week</span>
-            <span className="nav-shortcut">7</span>
+            <span>Weekly view</span>
           </button>
           <button
             onClick={() => {
@@ -734,29 +664,31 @@ export default function App() {
             }}
           >
             <BookOpen size={18} />
-            <span>My notes</span>
+            <span>Field notes</span>
           </button>
         </nav>
         <MiniCalendar selected={selected} onSelect={chooseDay} />
         <div className="sidebar-bottom">
-          <div className="gentle-reminder">
-            <span className="reminder-icon">
-              <Flower2 size={23} strokeWidth={1.4} />
-            </span>
+          <div className="consistency-card">
+            <ShieldCheck size={24} strokeWidth={1.3} />
             <p>
-              Your pace is
+              Consistency
               <br />
-              <em>the right pace.</em>
+              beats intensity<span>.</span>
             </p>
-            <span>
-              Make space for what matters.
-              <br />
-              Leave a little room for you.
-            </span>
+            <span>Small actions. Every day.</span>
+            <div className="mini-bars" aria-hidden="true">
+              {[24, 38, 31, 45, 39, 54, 65, 57, 76, 89, 78, 100].map(
+                (height, i) => (
+                  <i key={i} style={{ height: `${height}%` }} />
+                ),
+              )}
+            </div>
           </div>
           <button className="help-button" onClick={() => setDialog("help")}>
-            <CircleHelp size={16} />A little help
-            <ArrowRight size={14} />
+            <CircleHelp size={15} />
+            Quick briefing
+            <ArrowRight size={13} />
           </button>
           <button
             className="workspace-button"
@@ -764,43 +696,44 @@ export default function App() {
             aria-label="Open planner settings"
           >
             <span className="avatar">
-              {data.name ? data.name[0].toUpperCase() : <Sun size={19} />}
+              {data.name ? data.name[0].toUpperCase() : "Y"}
             </span>
             <span>
-              <strong>{data.name || "My workspace"}</strong>
-              <small>Your personal planner</small>
+              <strong>{data.name || "My cockpit"}</strong>
+              <small>Personal workspace</small>
             </span>
-            <Settings2 size={16} />
+            <Settings2 size={17} />
           </button>
         </div>
       </aside>
-
       <div className="workspace">
         <header className="topbar">
           <div className="breadcrumb">
             <button
               className="icon-button mobile-menu"
-              onClick={() => setSidebarOpen(true)}
               aria-label="Open navigation"
+              onClick={() => setSidebarOpen(true)}
             >
               <Menu size={21} />
             </button>
-            <Sun size={16} />
-            <span>My space</span>
+            <Crosshair size={16} />
+            <span>My workspace</span>
             <ChevronRight size={13} />
-            <strong>{view === "day" ? "My day" : "My week"}</strong>
+            <strong>
+              {view === "day" ? "Daily checklist" : "Weekly view"}
+            </strong>
           </div>
           <div className="topbar-right">
             <span
               className={`save-indicator ${storageWarning ? "warning" : ""}`}
             >
               <span />
-              {storageWarning ? "Not saved" : "All changes saved"}
+              {storageWarning ? "Not saved" : "All progress saved"}
             </span>
             <button
               className="top-avatar"
-              onClick={() => setDialog("settings")}
               aria-label="Planner settings"
+              onClick={() => setDialog("settings")}
             >
               {data.name ? data.name[0].toUpperCase() : "Y"}
             </button>
@@ -812,23 +745,7 @@ export default function App() {
               {storageWarning}
               <button onClick={exportPlan}>Export plan</button>
               {!canPersist && (
-                <button
-                  onClick={() => {
-                    try {
-                      const raw = localStorage.getItem(STORAGE_KEY);
-                      if (raw)
-                        localStorage.setItem(
-                          `${STORAGE_KEY}-recovery-${Date.now()}`,
-                          raw,
-                        );
-                      setCanPersist(true);
-                    } catch {
-                      setStorageWarning(
-                        "Could not back up your old plan. Browser storage may be full.",
-                      );
-                    }
-                  }}
-                >
+                <button onClick={recoverStorage}>
                   Back up old data & save
                 </button>
               )}
@@ -837,34 +754,51 @@ export default function App() {
           <section className="page-heading">
             <div>
               <p className="eyebrow">
-                <span className="tiny-sun">✳</span>
-                {longDate(selected).toUpperCase()}
+                <span className="status-dot" />
+                {selected === today
+                  ? "TODAY’S FLIGHT PLAN"
+                  : "YOUR FLIGHT PLAN"}
               </p>
               <h1>
-                {view === "day" ? (
-                  <>
-                    A day with <em>intention.</em>
-                  </>
-                ) : (
-                  <>
-                    See the <em>bigger picture.</em>
-                  </>
-                )}
+                {view === "day" ? "Your daily mission." : "The bigger picture."}
               </h1>
-              <p className="heading-description">
-                {data.name ? `${data.name}, a` : "A"} little structure. A little
-                breathing room. A day that feels like you.
-              </p>
             </div>
             <button
-              className="button primary add-task"
-              onClick={() => setEditor({ task: null, date: selected })}
+              className="button primary add-habit"
+              onClick={() => setEditor({ habit: null, date: selected })}
             >
-              <Plus size={17} />
-              Add task<span className="keyboard-hint">N</span>
+              <Plus size={16} />
+              Add habit<kbd>N</kbd>
             </button>
           </section>
-
+          <section className="aviation-hero" aria-label="Daily motivation">
+            <img
+              className="hero-photo"
+              src="/images/afterburner.png"
+              alt="Fighter jet banking over mountain clouds at sunset"
+              fetchPriority="high"
+            />
+            <div className="hero-shade" />
+            <div className="hero-copy">
+              <span className="hero-tag">
+                <Plane size={12} />
+                CLEARED FOR PROGRESS
+              </span>
+              <h2>
+                Show up.
+                <br />
+                <span>Rise above.</span>
+              </h2>
+              <p>
+                {data.name ? `${data.name}, your` : "Your"} routine. Your pace.
+                A better you, every day.
+              </p>
+            </div>
+            <span className="hero-coordinate">
+              <Crosshair size={14} />
+              STAY THE COURSE<span>01 / DAILY OPERATIONS</span>
+            </span>
+          </section>
           <div className="day-toolbar">
             <div className="date-controls">
               <button className="today-button" onClick={() => chooseDay(today)}>
@@ -891,15 +825,11 @@ export default function App() {
                 </button>
               </div>
               <label className="date-picker">
-                <CalendarDays size={15} />
+                <CalendarDays size={14} />
                 <span>
                   {view === "day"
-                    ? fromKey(selected).toLocaleDateString("en-US", {
-                        month: "short",
-                        day: "numeric",
-                        year: "numeric",
-                      })
-                    : `${fromKey(dates[0]).toLocaleDateString("en-US", { month: "short", day: "numeric" })} – ${fromKey(dates[6]).toLocaleDateString("en-US", { month: "short", day: "numeric" })}`}
+                    ? longDate(selected)
+                    : `${shortDate(dates[0])} – ${shortDate(dates[6])}`}
                 </span>
                 <ChevronDown size={13} />
                 <input
@@ -912,13 +842,13 @@ export default function App() {
                 />
               </label>
             </div>
-            <div className="view-switch" aria-label="Schedule view">
+            <div className="view-switch" aria-label="Checklist view">
               <button
                 className={view === "day" ? "active" : ""}
                 onClick={() => setView("day")}
                 aria-pressed={view === "day"}
               >
-                <ListTodo size={14} />
+                <ListChecks size={14} />
                 Day
               </button>
               <button
@@ -931,146 +861,152 @@ export default function App() {
               </button>
             </div>
           </div>
-
           <div className="content-grid">
             <div className="main-column">
               <section className="stats-grid" aria-label="Daily summary">
                 <div className="stat-card">
-                  <span className="stat-icon sage">
-                    <CheckCheck size={19} strokeWidth={1.6} />
+                  <span className="stat-icon">
+                    <CheckCheck size={18} />
                   </span>
                   <div>
-                    <p>Tasks completed</p>
+                    <p>Completed</p>
                     <strong>
                       {completed}
-                      <span> / {dayTasks.length}</span>
+                      <span> / {dayHabits.length}</span>
                     </strong>
-                    <span className="stat-caption">
-                      {completed === dayTasks.length && completed > 0
-                        ? "Look at you go!"
-                        : "One little win at a time"}
-                    </span>
-                  </div>
-                  <span
-                    className="mini-ring"
-                    style={
-                      { "--progress": `${progress}%` } as React.CSSProperties
-                    }
-                  >
-                    <span>{progress}%</span>
-                  </span>
-                </div>
-                <div className="stat-card">
-                  <span className="stat-icon peach">
-                    <Clock3 size={19} strokeWidth={1.6} />
-                  </span>
-                  <div>
-                    <p>Time planned</p>
-                    <strong>{readableDuration(planned)}</strong>
-                    <span className="stat-caption">
-                      For the things that matter
-                    </span>
+                    <small>
+                      {completed === dayHabits.length && completed > 0
+                        ? "Mission accomplished"
+                        : "One win at a time"}
+                    </small>
                   </div>
                 </div>
                 <div className="stat-card">
-                  <span className="stat-icon lavender">
-                    <Coffee size={19} strokeWidth={1.6} />
+                  <span className="stat-icon amber">
+                    <Flame size={18} />
                   </span>
                   <div>
-                    <p>Room to breathe</p>
+                    <p>Current streak</p>
                     <strong>
-                      {readableDuration(Math.max(0, 12 * 60 - planned))}
+                      {streak}
+                      <span> {streak === 1 ? "day" : "days"}</span>
                     </strong>
-                    <span className="stat-caption">
-                      In a 12-hour waking day
-                    </span>
+                    <small>Complete days in a row</small>
+                  </div>
+                </div>
+                <div className="stat-card">
+                  <span className="stat-icon blue">
+                    <Target size={18} />
+                  </span>
+                  <div>
+                    <p>Daily progress</p>
+                    <strong>
+                      {progress}
+                      <span>%</span>
+                    </strong>
+                    <div className="stat-progress">
+                      <span style={{ width: `${progress}%` }} />
+                    </div>
                   </div>
                 </div>
               </section>
-
               {view === "day" ? (
-                <section className="schedule-section">
+                <section className="checklist-section">
                   <div className="section-heading">
                     <div>
                       <h2>
-                        Your schedule{" "}
-                        <span className="count-badge">{dayTasks.length}</span>
+                        Daily checklist
+                        <span className="count-badge">{dayHabits.length}</span>
                       </h2>
-                      <p>A little plan for a lovely day.</p>
+                      <p>
+                        <Repeat2 size={12} />
+                        Every day. In your own order.
+                      </p>
                     </div>
-                    <label className="filter-select">
-                      <span className="sr-only">Filter tasks</span>
-                      <select
-                        value={filter}
-                        onChange={(e) => setFilter(e.target.value)}
-                      >
-                        <option>All tasks</option>
-                        <option>To do</option>
-                        <option>Completed</option>
-                        {CATEGORIES.map((c) => (
-                          <option key={c}>{c}</option>
-                        ))}
-                      </select>
-                      <ChevronDown size={13} />
-                    </label>
+                    <div className="filter-tabs" aria-label="Filter habits">
+                      {["All", "To do", "Done"].map((f) => (
+                        <button
+                          key={f}
+                          className={filter === f ? "active" : ""}
+                          onClick={() => setFilter(f)}
+                          aria-pressed={filter === f}
+                        >
+                          {f}
+                          {f === "All" && <span>{dayHabits.length}</span>}
+                        </button>
+                      ))}
+                    </div>
                   </div>
-                  <div className="timeline">
-                    {filteredTasks.map((task) => (
-                      <TaskCard
-                        key={task.id}
-                        task={task}
-                        onToggle={() => toggle(task.id)}
-                        onEdit={() => setEditor({ task, date: selected })}
-                        onDelete={() => deleteTask(task)}
+                  <div className="habit-list">
+                    {visibleHabits.map((habit) => (
+                      <HabitCard
+                        key={habit.id}
+                        habit={habit}
+                        index={dayHabits.findIndex((h) => h.id === habit.id)}
+                        onToggle={() => toggle(habit.id)}
+                        onEdit={() => setEditor({ habit, date: selected })}
+                        onDelete={() => removeHabit(habit)}
                       />
                     ))}
-                    {filteredTasks.length === 0 && (
+                    {visibleHabits.length === 0 && (
                       <div className="empty-state">
-                        <Sun size={34} strokeWidth={1.3} />
+                        <CheckCheck size={32} />
                         <h3>
-                          {dayTasks.length
-                            ? "Nothing here, just yet."
-                            : "A little room for possibility."}
+                          {filter === "To do" && completed > 0
+                            ? "Mission accomplished."
+                            : "A little open space."}
                         </h3>
                         <p>
-                          {dayTasks.length
-                            ? "Try another filter to find your tasks."
-                            : "Start with one thing you’d like to make time for."}
+                          {dayHabits.length
+                            ? "Nothing in this view. Try another filter."
+                            : "Add a habit to build your daily routine."}
                         </p>
                         <button
                           className="button secondary"
                           onClick={() =>
-                            dayTasks.length
-                              ? setFilter("All tasks")
-                              : setEditor({ task: null, date: selected })
+                            dayHabits.length
+                              ? setFilter("All")
+                              : setEditor({ habit: null, date: selected })
                           }
                         >
-                          {dayTasks.length
-                            ? "Show all tasks"
-                            : "Plan my first task"}
+                          {dayHabits.length ? "Show all habits" : "Add a habit"}
                           <ArrowRight size={14} />
                         </button>
                       </div>
                     )}
-                    {filteredTasks.length > 0 && (
-                      <button
-                        className="add-timeline"
-                        onClick={() =>
-                          setEditor({ task: null, date: selected })
-                        }
-                      >
-                        <span className="add-timeline-icon">
-                          <Plus size={15} />
-                        </span>
-                        <span>A little more to your day</span>
-                        <span className="add-timeline-key">N</span>
-                      </button>
-                    )}
                   </div>
-                  <div className="schedule-footnote">
-                    <Leaf size={13} />
-                    <span>
-                      Your plan is a guide. It’s okay to change the pace.
+                  <button
+                    className="add-to-routine"
+                    onClick={() => setEditor({ habit: null, date: selected })}
+                  >
+                    <Plus size={15} />
+                    <span>Add something worth repeating</span>
+                    <kbd>N</kbd>
+                  </button>
+                  <div
+                    className={`daily-progress-card ${progress === 100 ? "all-complete" : ""}`}
+                  >
+                    <span className="progress-symbol">
+                      {progress === 100 ? (
+                        <ShieldCheck size={21} />
+                      ) : (
+                        <Zap size={21} />
+                      )}
+                    </span>
+                    <div>
+                      <strong>
+                        {progress === 100
+                          ? "All done. All you."
+                          : "You don’t need a perfect day."}
+                      </strong>
+                      <p>
+                        {progress === 100
+                          ? "Every habit checked. Let’s do it again tomorrow."
+                          : "Just a few good things, done consistently."}
+                      </p>
+                    </div>
+                    <span className="progress-fraction">
+                      {completed}/{dayHabits.length}
                     </span>
                   </div>
                 </section>
@@ -1079,117 +1015,175 @@ export default function App() {
                   <div className="section-heading">
                     <div>
                       <h2>Your week at a glance</h2>
-                      <p>A little perspective. Plenty of possibility.</p>
+                      <p>Same routine. A fresh start each day.</p>
                     </div>
+                    <span className="week-legend">
+                      <span />
+                      Complete
+                    </span>
                   </div>
-                  <div className="week-grid">
-                    {dates.map((key) => {
-                      const tasks = data.tasks
-                        .filter((t) => t.date === key)
-                        .sort((a, b) => a.start.localeCompare(b.start));
-                      return (
-                        <div
-                          className={`week-day ${key === today ? "week-today" : ""}`}
-                          key={key}
-                        >
-                          <button
-                            className="week-date"
-                            onClick={() => chooseDay(key)}
-                          >
-                            <span>
-                              {fromKey(key).toLocaleDateString("en-US", {
-                                weekday: "short",
-                              })}
-                            </span>
-                            <strong>{fromKey(key).getDate()}</strong>
-                            {key === today && <span className="today-dot" />}
-                          </button>
-                          <div className="week-tasks">
-                            {tasks.map((t) => (
+                  <div
+                    className="week-scroll"
+                    tabIndex={0}
+                    aria-label="Weekly habit tracker"
+                  >
+                    <table className="week-table">
+                      <thead>
+                        <tr>
+                          <th scope="col">DAILY HABIT</th>
+                          {dates.map((d) => (
+                            <th
+                              key={d}
+                              scope="col"
+                              className={d === today ? "week-today" : ""}
+                            >
                               <button
-                                key={t.id}
-                                className={`week-task category-${t.category.toLowerCase()} ${t.done ? "done" : ""}`}
-                                onClick={() =>
-                                  setEditor({ task: t, date: key })
-                                }
+                                className="week-date"
+                                aria-label={`Open ${longDate(d)}`}
+                                onClick={() => chooseDay(d)}
                               >
                                 <span>
-                                  {t.done ? (
-                                    <Check size={11} />
-                                  ) : (
-                                    <span className="week-task-dot" />
-                                  )}
-                                  {clock(t.start)} {meridiem(t.start)}
+                                  {fromKey(d).toLocaleDateString("en-US", {
+                                    weekday: "short",
+                                  })}
                                 </span>
-                                <strong>{t.title}</strong>
+                                <strong>{fromKey(d).getDate()}</strong>
                               </button>
-                            ))}
-                            {tasks.length === 0 && (
-                              <p className="week-empty">A little open space</p>
-                            )}
-                          </div>
-                          <button
-                            className="week-add"
-                            aria-label={`Add task for ${longDate(key)}`}
-                            onClick={() => setEditor({ task: null, date: key })}
-                          >
-                            <Plus size={15} />
-                          </button>
-                        </div>
-                      );
-                    })}
+                            </th>
+                          ))}
+                        </tr>
+                      </thead>
+                      <tbody>
+                        {weekHabits.map((habit) => {
+                          const Icon = habitIcons[habit.icon];
+                          return (
+                            <tr key={habit.id}>
+                              <th scope="row">
+                                <span
+                                  className={`week-habit-name category-${habit.category.toLowerCase()}`}
+                                >
+                                  <Icon size={15} />
+                                  {habit.title}
+                                </span>
+                              </th>
+                              {dates.map((d) => {
+                                const done = (
+                                  data.completions[d] ?? []
+                                ).includes(habit.id);
+                                return (
+                                  <td
+                                    key={d}
+                                    className={d === today ? "week-today" : ""}
+                                  >
+                                    {isActive(habit, d) ? (
+                                      <button
+                                        className={`habit-check ${done ? "checked" : ""}`}
+                                        role="checkbox"
+                                        aria-checked={done}
+                                        aria-label={`${done ? "Mark incomplete" : "Mark complete"}: ${habit.title} on ${shortDate(d)}`}
+                                        onClick={() => toggle(habit.id, d)}
+                                      >
+                                        <Check size={13} />
+                                      </button>
+                                    ) : (
+                                      <span
+                                        className="inactive-day"
+                                        aria-label="Not in routine on this day"
+                                      >
+                                        —
+                                      </span>
+                                    )}
+                                  </td>
+                                );
+                              })}
+                            </tr>
+                          );
+                        })}
+                      </tbody>
+                      <tfoot>
+                        <tr>
+                          <th scope="row">DAILY TOTAL</th>
+                          {dates.map((d) => {
+                            const habits = habitsForDate(data, d);
+                            return (
+                              <td key={d}>
+                                {habits.filter((h) => h.done).length}
+                                <span>/{habits.length}</span>
+                              </td>
+                            );
+                          })}
+                        </tr>
+                      </tfoot>
+                    </table>
                   </div>
-                  <div className="week-summary">
-                    <Leaf size={15} />
-                    {
-                      data.tasks.filter((t) => dates.includes(t.date)).length
-                    }{" "}
-                    intentions this week. Make room for yourself, too.
-                  </div>
+                  <p className="week-footnote">
+                    <Repeat2 size={13} />
+                    Click any square to track that day. Your progress is always
+                    saved.
+                  </p>
                 </section>
               )}
             </div>
-
             <aside className="right-column">
               <section className="focus-card">
                 <div className="card-topline">
                   <span>
-                    <Focus size={15} />A MOMENT OF FOCUS
+                    <Crosshair size={14} />
+                    FOCUS MODE
                   </span>
                   <span className={`live-dot ${deadline ? "running" : ""}`} />
                 </div>
-                <PlantIllustration />
-                <h2>One thing at a time.</h2>
-                <p>Settle in. Let the rest wait a little.</p>
+                <h2>Lock in.</h2>
+                <p>One thing. Your full attention.</p>
                 <div
-                  className={`timer ${deadline ? "running" : ""}`}
-                  role="timer"
-                  aria-label={`${Math.floor(remaining / 60)} minutes ${remaining % 60} seconds remaining`}
+                  className="timer-orbit"
+                  style={
+                    {
+                      "--timer-progress": `${((FOCUS_SECONDS - remaining) / FOCUS_SECONDS) * 100}%`,
+                    } as React.CSSProperties
+                  }
                 >
-                  {String(Math.floor(remaining / 60)).padStart(2, "0")}
-                  <span>:</span>
-                  {String(remaining % 60).padStart(2, "0")}
+                  <span className="orbit-mark top" />
+                  <span className="orbit-mark right" />
+                  <span className="orbit-mark bottom" />
+                  <span className="orbit-mark left" />
+                  <div className="timer-inner">
+                    <span className="timer-label">
+                      {deadline
+                        ? "IN THE ZONE"
+                        : remaining === 0
+                          ? "SESSION COMPLETE"
+                          : "READY WHEN YOU ARE"}
+                    </span>
+                    <div
+                      className="timer"
+                      role="timer"
+                      aria-label={`${Math.floor(remaining / 60)} minutes ${remaining % 60} seconds remaining`}
+                    >
+                      {String(Math.floor(remaining / 60)).padStart(2, "0")}
+                      <span>:</span>
+                      {String(remaining % 60).padStart(2, "0")}
+                    </div>
+                    <span className="timer-duration">30 MIN / SESSION</span>
+                  </div>
                 </div>
                 <label className="focus-task-select">
-                  <span className="sr-only">Choose focus task</span>
+                  <Crosshair size={13} />
+                  <span className="sr-only">Choose focus habit</span>
                   <select
                     value={
-                      dayTasks.some((t) => t.id === focusTask && !t.done)
+                      dayHabits.some((h) => h.id === focusTask && !h.done)
                         ? focusTask
                         : ""
                     }
                     onChange={(e) => setFocusTask(e.target.value)}
                   >
-                    <option value="">
-                      {remaining === 0
-                        ? "Well done. Time for a little break."
-                        : "What would you like to focus on?"}
-                    </option>
-                    {dayTasks
-                      .filter((t) => !t.done)
-                      .map((t) => (
-                        <option key={t.id} value={t.id}>
-                          {t.title}
+                    <option value="">Choose your focus</option>
+                    {dayHabits
+                      .filter((h) => !h.done)
+                      .map((h) => (
+                        <option key={h.id} value={h.id}>
+                          {h.title}
                         </option>
                       ))}
                   </select>
@@ -1209,22 +1203,23 @@ export default function App() {
                         setDeadline(null);
                       } else {
                         const seconds =
-                          remaining > 0 ? remaining : data.focusMinutes * 60;
+                          remaining > 0 ? remaining : FOCUS_SECONDS;
                         setRemaining(seconds);
+                        completedDeadline.current = null;
                         setDeadline(Date.now() + seconds * 1000);
                       }
                     }}
                   >
                     {deadline ? (
-                      <Pause size={14} fill="currentColor" />
+                      <Pause size={13} fill="currentColor" />
                     ) : (
-                      <Play size={14} fill="currentColor" />
+                      <Play size={13} fill="currentColor" />
                     )}
                     {deadline
                       ? "Pause focus"
                       : remaining === 0
                         ? "Start again"
-                        : remaining < data.focusMinutes * 60
+                        : remaining < FOCUS_SECONDS
                           ? "Resume focus"
                           : "Start focus"}
                   </button>
@@ -1233,98 +1228,90 @@ export default function App() {
                     aria-label="Reset focus timer"
                     onClick={() => {
                       setDeadline(null);
-                      setRemaining(data.focusMinutes * 60);
+                      setRemaining(FOCUS_SECONDS);
                     }}
                   >
-                    <RotateCcw size={16} />
+                    <RotateCcw size={15} />
                   </button>
                 </div>
-                <span className="focus-footnote">
-                  A little focus goes a long way.
-                </span>
+                <p className="focus-footnote">
+                  <span />
+                  {data.focusSessions[today] ?? 0}{" "}
+                  {data.focusSessions[today] === 1 ? "session" : "sessions"}{" "}
+                  completed today
+                </p>
               </section>
               <section className="notes-card">
                 <div className="notes-heading">
-                  <span className="note-icon">
+                  <span>
                     <Pencil size={15} />
+                    Field notes
                   </span>
-                  <h2>A little note</h2>
                   <button
                     className="icon-button small"
-                    onClick={() => {
-                      notesRef.current?.focus();
-                    }}
-                    aria-label="Edit daily note"
+                    onClick={() => setDialog("notes")}
+                    aria-label="Expand daily note"
                   >
-                    <Ellipsis size={18} />
+                    <ArrowRight size={15} />
                   </button>
                 </div>
                 <textarea
-                  ref={notesRef}
                   aria-label="Daily note"
                   placeholder={
-                    "A thought, a reminder,\na little something for later…"
+                    "Clear your head. Put it on paper.\nA thought, a reminder, a small win…"
                   }
                   value={note}
                   onChange={(e) => setNote(e.target.value)}
                   maxLength={10000}
                 />
                 <div className="notes-footer">
+                  <span>{shortDate(selected)}</span>
                   <span>
-                    {note
-                      ? "Saved with your day"
-                      : "Just for you. Always saved."}
-                  </span>
-                  <span className="note-scribble" aria-hidden="true">
-                    <svg viewBox="0 0 44 32" fill="none">
-                      <path
-                        d="M5 22c12-3 25-15 23-19-3-4-11 5-10 12 1 6 10 6 19 1m-3-4 4 4-5 3"
-                        stroke="currentColor"
-                        strokeWidth="1.4"
-                        strokeLinecap="round"
-                        strokeLinejoin="round"
-                      />
-                    </svg>
+                    <span />
+                    AUTO-SAVED
                   </span>
                 </div>
               </section>
-              <div className="daily-thought">
-                <Sparkles size={15} strokeWidth={1.4} />
-                <p>
-                  “Almost everything will work again
-                  <br />
-                  if you unplug it for a few minutes,
-                  <br />
-                  <em>including you.</em>”
-                </p>
-                <span>— ANNE LAMOTT</span>
+              <div className="aviation-card">
+                <img
+                  src="/images/afterburner.png"
+                  alt="Fighter jet above the clouds in warm evening light"
+                  loading="lazy"
+                />
+                <div>
+                  <Plane size={16} />
+                  <p>
+                    Keep your eyes
+                    <br />
+                    on the horizon.
+                  </p>
+                  <span>PROGRESS IS A DAILY PRACTICE.</span>
+                </div>
               </div>
             </aside>
           </div>
           <footer className="page-footer">
             <span>
-              <Sun size={14} />A little progress, every day.
+              <Plane size={13} />A little discipline. A different altitude.
             </span>
             <span>
-              Made for a more mindful day
-              <span className="footer-flower">✳</span>
+              YOUR EVERYDAY, ELEVATED.
+              <span className="footer-dot" />
             </span>
           </footer>
         </main>
       </div>
-
       {editor && (
-        <TaskEditor
-          task={editor.task}
+        <HabitEditor
+          habit={editor.habit}
           selected={editor.date}
-          tasks={data.tasks}
+          onSave={saveHabit}
           onClose={() => setEditor(null)}
-          onSave={saveTask}
         />
       )}
       {dialog === "notes" && (
         <Dialog
-          title="A little space for your thoughts."
+          title="Clear skies. Clear mind."
           description={longDate(selected)}
           onClose={() => setDialog(null)}
           className="notebook-dialog"
@@ -1336,12 +1323,12 @@ export default function App() {
               rows={12}
               value={note}
               onChange={(e) => setNote(e.target.value)}
-              placeholder="An idea, a gratitude, something to remember…"
+              placeholder="An idea, a small win, something to remember…"
               maxLength={10000}
             />
           </label>
           <div className="dialog-footer">
-            <span className="muted">Saved automatically with your day.</span>
+            <span className="muted">Saved automatically with this day.</span>
             <button className="button primary" onClick={() => setDialog(null)}>
               All done
               <Check size={15} />
@@ -1351,8 +1338,8 @@ export default function App() {
       )}
       {dialog === "settings" && (
         <Dialog
-          title="Make yourself at home."
-          description="The little things that make this space yours."
+          title="Your personal cockpit."
+          description="Make this space yours."
           onClose={() => setDialog(null)}
         >
           <label className="field">
@@ -1366,28 +1353,19 @@ export default function App() {
               placeholder="Your first name"
             />
           </label>
-          <label className="field">
-            Your focus session
-            <select
-              value={data.focusMinutes}
-              onChange={(e) =>
-                setData((prev) => ({
-                  ...prev,
-                  focusMinutes: Number(e.target.value),
-                }))
-              }
-            >
-              {[15, 25, 45, 60].map((n) => (
-                <option value={n} key={n}>
-                  {n} minutes
-                </option>
-              ))}
-            </select>
-          </label>
+          <div className="settings-focus">
+            <Crosshair size={20} />
+            <div>
+              <strong>30-minute focus sessions</strong>
+              <span>A fixed block to practice, learn, or create.</span>
+            </div>
+            <span>30:00</span>
+          </div>
           <p className="settings-copy">
-            <Leaf size={18} />
-            Your plans stay in this browser on this device. Export a copy
-            whenever you’d like to keep a backup.
+            <ShieldCheck size={18} />
+            Your routine, checkmarks, and notes stay in this browser. Export a
+            copy to keep a backup. Earlier planner data is preserved in your
+            export.
           </p>
           <div className="dialog-footer">
             <button className="button secondary" onClick={exportPlan}>
@@ -1395,7 +1373,7 @@ export default function App() {
               Export my plan
             </button>
             <button className="button primary" onClick={() => setDialog(null)}>
-              Feels like me
+              All set
               <Check size={15} />
             </button>
           </div>
@@ -1403,52 +1381,57 @@ export default function App() {
       )}
       {dialog === "help" && (
         <Dialog
-          title="A little help along the way."
-          description="A simple space for a day that feels like you."
+          title="Your daily briefing."
+          description="A simple routine. Room to get better."
           onClose={() => setDialog(null)}
         >
           <div className="help-list">
             <p>
-              <CheckCheck size={22} />
+              <Repeat2 size={22} />
               <span>
-                <strong>Little ticks, little wins</strong>Click the circle
-                beside a task to complete it. Click again to bring it back.
+                <strong>A fresh checklist, every day</strong>Your six habits
+                repeat daily without time slots. Each day keeps its own
+                checkmarks. If you leave today open overnight, it rolls into a
+                fresh day automatically.
               </span>
             </p>
             <p>
-              <CalendarDays size={22} />
+              <CheckCheck size={22} />
               <span>
-                <strong>A plan that moves with you</strong>Pick a date in the
-                calendar, or switch to Week to see the bigger picture.
+                <strong>Tick on. Tick off.</strong>Click any square to mark a
+                habit complete. Click again to undo it. Open the weekly view to
+                check any day.
               </span>
             </p>
             <p>
               <Pencil size={22} />
               <span>
-                <strong>Always room for a change</strong>Click a task’s title to
-                edit it. Its three-dot menu also lets you delete it.
+                <strong>Your routine can evolve</strong>Click a habit’s title to
+                edit it, or press <kbd>N</kbd> to add one. Removing a habit
+                affects the selected day and later days; earlier progress stays
+                saved.
               </span>
             </p>
             <p>
-              <Focus size={22} />
+              <Crosshair size={22} />
               <span>
-                <strong>A little room to focus</strong>Choose a task and start
-                the timer. Set your preferred duration in settings.
+                <strong>30 minutes of focus</strong>Pick a habit and start.
+                Pause, resume, or reset when you need to. Completed sessions are
+                counted for today. Reloading resets a running timer.
               </span>
             </p>
             <p>
-              <ListTodo size={22} />
+              <Flame size={22} />
               <span>
-                <strong>Yours to keep</strong>The first day includes example
-                tasks you can edit or remove. Plans and notes save in this
-                browser. Export a backup in settings. Press <kbd>N</kbd> to add
-                a task.
+                <strong>Build your streak</strong>Check every habit to complete
+                a day. Consecutive completed days make a streak; today gives you
+                until midnight to keep it going.
               </span>
             </p>
           </div>
           <div className="dialog-footer">
             <button className="button primary" onClick={() => setDialog(null)}>
-              Let’s make a little progress
+              Ready for takeoff
               <ArrowRight size={15} />
             </button>
           </div>
@@ -1456,19 +1439,19 @@ export default function App() {
       )}
       {toast && (
         <div className="toast" role="status">
-          <Check size={17} />
+          <Check size={16} />
           <span>{toast.message}</span>
-          {toast.deleted && (
+          {toast.removed && (
             <button
               onClick={() => {
-                const task = toast.deleted!;
+                const habit = toast.removed!;
                 setData((prev) => ({
                   ...prev,
-                  tasks: prev.tasks.some((t) => t.id === task.id)
-                    ? prev.tasks
-                    : [...prev.tasks, task],
+                  habits: prev.habits.map((h) =>
+                    h.id === habit.id ? habit : h,
+                  ),
                 }));
-                setToast({ message: "Task restored. Welcome back." });
+                setToast({ message: "Habit restored. Back on course." });
               }}
             >
               Undo
@@ -1476,8 +1459,8 @@ export default function App() {
           )}
           <button
             className="toast-close"
-            onClick={() => setToast(null)}
             aria-label="Dismiss notification"
+            onClick={() => setToast(null)}
           >
             <X size={14} />
           </button>
