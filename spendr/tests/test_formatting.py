@@ -12,9 +12,11 @@ from spendr.formatting import (
     budget_table,
     categories_table,
     describe_expense,
+    describe_recurring,
     expenses_table,
     format_amount,
     format_percent,
+    recurring_table,
     summary_chart,
     summary_table,
     usage_meter,
@@ -26,6 +28,8 @@ from spendr.models import (
     CategoryTotal,
     CategoryUsage,
     Expense,
+    Frequency,
+    RecurringExpense,
     Summary,
     SummaryRow,
 )
@@ -301,3 +305,35 @@ class TestBudgetHighlights:
 
         assert "1 234 UZS" in output
         assert "Left to spend" not in output
+
+
+def make_rule(**changes: object) -> RecurringExpense:
+    values: dict[str, object] = {
+        "id": 1,
+        "amount": 1_250_000,
+        "category_id": 1,
+        "category": "housing",
+        "note": "rent",
+        "frequency": Frequency.MONTHLY,
+        "start_date": date(2026, 11, 1),
+        "end_date": None,
+        "last_posted": date(2026, 11, 1),
+    }
+    return RecurringExpense(**{**values, **changes})  # type: ignore[arg-type]
+
+
+def test_describe_recurring() -> None:
+    assert describe_recurring(make_rule(), "UZS") == "#1 · 1 250 000 UZS · housing · monthly · rent"
+    assert describe_recurring(make_rule(note=""), "UZS") == "#1 · 1 250 000 UZS · housing · monthly"
+
+
+def test_recurring_table() -> None:
+    ended = make_rule(id=2, note="[gym]", frequency=Frequency.YEARLY, end_date=date(2026, 11, 1))
+
+    lines = render(recurring_table([make_rule(), ended], "UZS")).splitlines()
+
+    active = next(line for line in lines if "rent" in line)
+    assert "1 250 000" in active and "monthly" in active
+    assert "2026-12-01" in active and "never" in active
+    finished = next(line for line in lines if "[gym]" in line)
+    assert "yearly" in finished and "ended" in finished and "2026-11-01" in finished

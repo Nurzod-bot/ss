@@ -6,7 +6,14 @@ from rich.panel import Panel
 from rich.table import Table
 from rich.text import Text
 
-from spendr.models import BudgetReport, BudgetState, CategoryUsage, Expense, Summary
+from spendr.models import (
+    BudgetReport,
+    BudgetState,
+    CategoryUsage,
+    Expense,
+    RecurringExpense,
+    Summary,
+)
 
 BAR_WIDTH = 30
 BAR_COLORS = ("cyan", "magenta", "green", "yellow", "blue", "red")
@@ -219,3 +226,34 @@ def budget_highlights(report: BudgetReport, currency: str) -> Panel:
             "Tip", Text("set an overall limit with: spendr budget total AMOUNT", style="dim")
         )
     return Panel(grid, title="Highlights", title_align="left", expand=False)
+
+
+def describe_recurring(rule: RecurringExpense, currency: str) -> str:
+    """One-line plain-text summary used in confirmation messages."""
+    parts = [f"#{rule.id}", format_amount(rule.amount, currency), rule.category, rule.frequency]
+    if rule.note:
+        parts.append(rule.note)
+    return " · ".join(parts)
+
+
+def recurring_table(rules: Sequence[RecurringExpense], currency: str) -> Table:
+    table = Table(title="Recurring expenses", header_style="bold")
+    table.add_column("ID", justify="right", style="dim", no_wrap=True)
+    table.add_column("Category", style="cyan")
+    table.add_column(f"Amount ({currency})", justify="right", no_wrap=True)
+    table.add_column("Repeats", no_wrap=True)
+    table.add_column("Next due", no_wrap=True)
+    table.add_column("Ends", no_wrap=True)
+    table.add_column("Note")
+    for rule in rules:
+        next_due = rule.next_due
+        table.add_row(
+            str(rule.id),
+            Text(rule.category),
+            format_amount(rule.amount),
+            rule.frequency.value,
+            next_due.isoformat() if next_due else Text("ended", style="dim"),
+            rule.end_date.isoformat() if rule.end_date else Text("never", style="dim"),
+            Text(rule.note),
+        )
+    return table

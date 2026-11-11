@@ -1,6 +1,17 @@
+from datetime import date
+
 import pytest
 
-from spendr.models import BudgetLine, BudgetReport, BudgetState, CategoryTotal, budget_state
+from spendr.models import (
+    BudgetLine,
+    BudgetReport,
+    BudgetState,
+    CategoryTotal,
+    Frequency,
+    RecurringExpense,
+    add_months,
+    budget_state,
+)
 
 
 @pytest.mark.parametrize(
@@ -101,3 +112,114 @@ class TestBudgetReport:
         report = make_report(overall_budget=1000, total_spent=100, days_left=days_left)
 
         assert report.daily_allowance == expected
+
+
+class TestAddMonths:
+    @pytest.mark.parametrize(
+        ("start", "months", "expected"),
+        [
+            (date(2026, 1, 15), 1, date(2026, 2, 15)),
+            (date(2026, 1, 31), 1, date(2026, 2, 28)),
+            (date(2024, 1, 31), 1, date(2024, 2, 29)),
+            (date(2026, 1, 31), 2, date(2026, 3, 31)),
+            (date(2026, 11, 30), 2, date(2027, 1, 30)),
+            (date(2026, 12, 1), 1, date(2027, 1, 1)),
+            (date(2024, 2, 29), 12, date(2025, 2, 28)),
+            (date(2026, 5, 5), 0, date(2026, 5, 5)),
+        ],
+    )
+    def test_add_months(self, start: date, months: int, expected: date) -> None:
+        assert add_months(start, months) == expected
+
+
+def make_rule(
+    frequency: Frequency,
+    start: date,
+    *,
+    end: date | None = None,
+    last_posted: date | None = None,
+) -> RecurringExpense:
+    return RecurringExpense(
+        id=1,
+        amount=100,
+        category_id=1,
+        category="food",
+        note="",
+        frequency=frequency,
+        start_date=start,
+        end_date=end,
+        last_posted=last_posted,
+    )
+
+
+class TestRecurringExpense:
+    def test_daily(self) -> None:
+        rule = make_rule(Frequency.DAILY, date(2026, 11, 9))
+
+        assert rule.due_dates(date(2026, 11, 11)) == [
+            date(2026, 11, 9),
+            date(2026, 11, 10),
+            date(2026, 11, 11),
+        ]
+
+    def test_weekly(self) -> None:
+        rule = make_rule(Frequency.WEEKLY, date(2026, 11, 1))
+
+        assert rule.due_dates(date(2026, 11, 15)) == [
+            date(2026, 11, 1),
+            date(2026, 11, 8),
+            date(2026, 11, 15),
+        ]
+
+    def test_monthly_on_the_31st_does_not_drift(self) -> None:
+        rule = make_rule(Frequency.MONTHLY, date(2026, 1, 31))
+
+        assert rule.due_dates(date(2026, 4, 30)) == [
+            date(2026, 1, 31),
+            date(2026, 2, 28),
+            date(2026, 3, 31),
+            date(2026, 4, 30),
+        ]
+
+    def test_yearly_from_leap_day(self) -> None:
+        rule = make_rule(Frequency.YEARLY, date(2024, 2, 29))
+
+        assert rule.due_dates(date(2028, 12, 31)) == [
+            date(2024, 2, 29),
+            date(2025, 2, 28),
+            date(2026, 2, 28),
+            date(2027, 2, 28),
+            date(2028, 2, 29),
+        ]
+
+    def test_nothing_due_before_start(self) -> None:
+        rule = make_rule(Frequency.MONTHLY, date(2026, 12, 1))
+
+        assert rule.due_dates(date(2026, 11, 30)) == []
+        assert rule.next_due == date(2026, 12, 1)
+
+    def test_already_recorded_occurrences_are_skipped(self) -> None:
+        rule = make_rule(Frequency.MONTHLY, date(2026, 1, 10), last_posted=date(2026, 3, 10))
+
+        assert rule.due_dates(date(2026, 5, 31)) == [date(2026, 4, 10), date(2026, 5, 10)]
+        assert rule.next_due == date(2026, 4, 10)
+
+    def test_end_date_is_inclusive(self) -> None:
+        rule = make_rule(Frequency.MONTHLY, date(2026, 1, 10), end=date(2026, 3, 10))
+
+        assert rule.due_dates(date(2026, 12, 31)) == [
+            date(2026, 1, 10),
+            date(2026, 2, 10),
+            date(2026, 3, 10),
+        ]
+
+    def test_next_due_is_none_once_ended(self) -> None:
+        rule = make_rule(
+            Frequency.MONTHLY,
+            date(2026, 1, 10),
+            end=date(2026, 3, 9),
+            last_posted=date(2026, 2, 10),
+        )
+
+        assert rule.next_due is None
+        assert rule.due_dates(date(2026, 12, 31)) == []

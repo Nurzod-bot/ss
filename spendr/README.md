@@ -16,6 +16,8 @@ category, set budgets, and see where the money went — without leaving the term
 - **Monthly summary** — totals and share per category, with a bar chart
 - **Budgets** — per-category budgets plus an overall monthly limit, with savings,
   a daily allowance and red warnings above 90%
+- **Recurring expenses** — rent, subscriptions and the like are recorded automatically
+  when they fall due
 - **Categories** — add, rename and remove your own
 - **Export and import** — CSV and JSON out, CSV in, with all-or-nothing validation
 - **Exact money** — amounts are stored as integers, never floats
@@ -173,6 +175,25 @@ spendr budget status --month 2026-11
 A category turns red once more than 90% of its budget is spent. For a past month
 the panel shows what you **saved** instead of what is left to spend.
 
+### Recurring expenses
+
+For anything that repeats on a schedule, such as rent or a subscription:
+
+```bash
+spendr recurring add 1250000 housing "rent" --every monthly --start 2026-11-01
+spendr recurring add 3000 transport "bus pass" --every weekly
+spendr recurring add 99000 entertainment "gym" --every yearly --end 2028-12-31
+
+spendr recurring list
+spendr recurring remove 1        # stops it; expenses already recorded are kept
+```
+
+`--every` is `daily`, `weekly`, `monthly` (the default) or `yearly`, and `--start`
+defaults to today. Whenever you run any spendr command, occurrences that have fallen
+due since last time are recorded as ordinary expenses, each exactly once. A start
+date in the past is backfilled. A monthly expense that starts on the 31st falls on
+the last day of shorter months.
+
 ### Export
 
 ```bash
@@ -280,7 +301,7 @@ keeps each layer testable on its own.
 
 ## Roadmap
 
-- [ ] Recurring expenses
+- [x] Recurring expenses
 - [ ] Multiple currencies with conversion
 - [ ] Income tracking
 - [ ] Interactive TUI mode with [Textual](https://textual.textualize.io)

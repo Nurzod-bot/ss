@@ -18,12 +18,21 @@ from spendr.formatting import (
     budget_table,
     categories_table,
     describe_expense,
+    describe_recurring,
     expenses_table,
     format_amount,
+    recurring_table,
     summary_chart,
     summary_table,
 )
-from spendr.services import BudgetService, CategoryService, ExpenseService, SummaryService
+from spendr.models import Frequency
+from spendr.services import (
+    BudgetService,
+    CategoryService,
+    ExpenseService,
+    RecurringService,
+    SummaryService,
+)
 from spendr.transfer import ExportFormat, TransferService, write_text
 
 app = typer.Typer(
@@ -37,9 +46,13 @@ app = typer.Typer(
 
 category_app = typer.Typer(help="Manage expense categories.", no_args_is_help=True)
 budget_app = typer.Typer(help="Set budgets and track spending against them.", no_args_is_help=True)
+recurring_app = typer.Typer(
+    help="Expenses that repeat on a schedule, such as rent.", no_args_is_help=True
+)
 config_app = typer.Typer(help="Show or change settings.", no_args_is_help=True)
 app.add_typer(category_app, name="category")
 app.add_typer(budget_app, name="budget")
+app.add_typer(recurring_app, name="recurring")
 app.add_typer(config_app, name="config")
 
 # Automatic highlighting would colour digits and paths inconsistently; all styling is explicit.
@@ -57,6 +70,7 @@ class Session:
     summaries: SummaryService
     budgets: BudgetService
     transfer: TransferService
+    recurring: RecurringService
 
 
 @contextmanager
@@ -76,6 +90,9 @@ def session() -> Iterator[Session]:
     with friendly_errors():
         settings = config.load_config()
         with closing(db.connect(config.db_path())) as conn:
+            recurring = RecurringService(conn)
+            # Catch up on recurring expenses first, so every command sees them.
+            _report_recorded(recurring.apply_due())
             yield Session(
                 currency=settings.currency,
                 expenses=ExpenseService(conn),
@@ -83,7 +100,16 @@ def session() -> Iterator[Session]:
                 summaries=SummaryService(conn),
                 budgets=BudgetService(conn),
                 transfer=TransferService(conn),
+                recurring=recurring,
             )
+
+
+def _report_recorded(count: int) -> None:
+    """Mention newly recorded recurring expenses on stderr, keeping stdout clean."""
+    if count:
+        err_console.print(
+            f"[dim]Recorded {count} recurring expense{'s' if count != 1 else ''} that fell due.[/]"
+        )
 
 
 def _version_callback(value: bool) -> None:
@@ -408,6 +434,55 @@ def budget_status(month: MonthOption = None) -> None:
         if report.lines:
             console.print(budget_table(report, s.currency))
         console.print(budget_highlights(report, s.currency))
+
+
+@recurring_app.command("add", context_settings={"ignore_unknown_options": True})
+def recurring_add(
+    amount: Annotated[str, typer.Argument(help="Whole amount, e.g. 1250000.")],
+    category: Annotated[str, typer.Argument(help="Category name, e.g. housing.")],
+    note: Annotated[str, typer.Argument(help="Optional description.")] = "",
+    every: Annotated[
+        Frequency, typer.Option("--every", "-e", help="How often it repeats.")
+    ] = Frequency.MONTHLY,
+    start: Annotated[
+        str | None,
+        typer.Option("--start", metavar="YYYY-MM-DD", help="First due date. Defaults to today."),
+    ] = None,
+    end: Annotated[
+        str | None,
+        typer.Option("--end", metavar="YYYY-MM-DD", help="Last possible due date."),
+    ] = None,
+) -> None:
+    """Add an expense that repeats. Due occurrences are recorded automatically."""
+    with session() as s:
+        rule = s.recurring.add(amount, category, note, frequency=every, start=start, end=end)
+        console.print(f"[green]Added recurring[/] {escape(describe_recurring(rule, s.currency))}")
+        _report_recorded(s.recurring.apply_due())
+
+
+@recurring_app.command("list")
+def recurring_list() -> None:
+    """Show recurring expenses and when each is next due."""
+    with session() as s:
+        rules = s.recurring.list_all()
+        if not rules:
+            console.print(
+                "No recurring expenses. Add one with: spendr recurring add AMOUNT CATEGORY"
+            )
+            return
+        console.print(recurring_table(rules, s.currency))
+
+
+@recurring_app.command("remove")
+def recurring_remove(
+    rule_id: Annotated[
+        int, typer.Argument(metavar="ID", help="Id shown by `spendr recurring list`.")
+    ],
+) -> None:
+    """Stop a recurring expense. Expenses it already recorded are kept."""
+    with session() as s:
+        rule = s.recurring.remove(rule_id)
+        console.print(f"[green]Removed recurring[/] {escape(describe_recurring(rule, s.currency))}")
 
 
 @config_app.command("show")

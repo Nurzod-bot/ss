@@ -63,6 +63,22 @@ MIGRATIONS: tuple[tuple[str, ...], ...] = (
         ) WITHOUT ROWID
         """,
     ),
+    # 3: templates that turn into real expenses each time they fall due
+    (
+        """
+        CREATE TABLE recurring_expenses (
+            id          INTEGER PRIMARY KEY,
+            amount      INTEGER NOT NULL CHECK (typeof(amount) = 'integer' AND amount > 0),
+            category_id INTEGER NOT NULL REFERENCES categories (id) ON DELETE RESTRICT,
+            note        TEXT    NOT NULL DEFAULT '',
+            frequency   TEXT    NOT NULL
+                        CHECK (frequency IN ('daily', 'weekly', 'monthly', 'yearly')),
+            start_date  TEXT    NOT NULL CHECK (start_date IS date(start_date)),
+            end_date    TEXT    CHECK (end_date IS NULL OR end_date IS date(end_date)),
+            last_posted TEXT    CHECK (last_posted IS NULL OR last_posted IS date(last_posted))
+        )
+        """,
+    ),
 )
 
 SCHEMA_VERSION = len(MIGRATIONS)

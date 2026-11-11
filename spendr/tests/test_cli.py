@@ -1,4 +1,5 @@
 import json
+import sqlite3
 from datetime import date
 from pathlib import Path
 
@@ -593,3 +594,87 @@ class TestImport:
 
     def test_missing_argument(self) -> None:
         assert "Missing argument" in run("import", ok=False)
+
+
+class TestRecurring:
+    def test_help_lists_recurring(self) -> None:
+        assert "recurring" in run("--help")
+
+    def test_list_empty(self) -> None:
+        assert "No recurring expenses" in run("recurring", "list")
+
+    def test_add_records_due_occurrences_immediately(self) -> None:
+        output = run("recurring", "add", "1250000", "housing", "rent", "--start", "2020-01-31")
+
+        assert "Added recurring #1 · 1 250 000 UZS · housing · monthly · rent" in output
+        assert "recurring expenses that fell due" in output
+        assert "2020-02-29" in run("list", "--month", "2020-02")
+
+    def test_add_in_the_future_records_nothing_yet(self) -> None:
+        output = run(
+            "recurring", "add", "100", "food", "--every", "weekly", "--start", "2999-01-01"
+        )
+
+        assert "fell due" not in output
+        assert "No expenses found." in run("list")
+        listing = run("recurring", "list")
+        assert "weekly" in listing and "2999-01-01" in listing and "never" in listing
+
+    def test_add_defaults_to_today(self) -> None:
+        output = run("recurring", "add", "100", "food")
+
+        assert "Recorded 1 recurring expense that fell due." in output
+        assert date.today().isoformat() in run("list")
+
+    def test_due_occurrences_are_recorded_by_any_later_command(self, cli_env: Path) -> None:
+        run("recurring", "add", "100", "food", "--start", "2999-01-01")
+        connection = sqlite3.connect(cli_env / "cli.db")
+        with connection:
+            connection.execute("UPDATE recurring_expenses SET start_date = '2026-01-15'")
+        connection.close()
+
+        first = run("list", "--month", "2026-01")
+        second = run("list", "--month", "2026-01")
+
+        assert "that fell due" in first
+        assert "that fell due" not in second
+        assert "1 expense ·" in second
+
+    def test_export_output_stays_parseable(self) -> None:
+        result = runner.invoke(app, ["recurring", "add", "100", "food", "--start", "2026-01-15"])
+        assert result.exit_code == 0
+
+        exported = runner.invoke(app, ["export"])
+
+        assert exported.stdout.splitlines()[0] == "id,date,category,amount,note"
+        assert "fell due" not in exported.stdout
+
+    @pytest.mark.parametrize(
+        ("args", "message"),
+        [
+            (["-5", "food"], "greater than zero"),
+            (["100", "pets"], "Unknown category"),
+            (["100", "food", "--every", "hourly"], "Invalid value"),
+            (["100", "food", "--start", "2026-02-30"], "Invalid date"),
+            (["100", "food", "--start", "2026-11-10", "--end", "2026-11-01"], "must not be before"),
+        ],
+    )
+    def test_add_invalid(self, args: list[str], message: str) -> None:
+        assert message in run("recurring", "add", *args, ok=False)
+        assert "No recurring expenses" in run("recurring", "list")
+
+    def test_remove(self) -> None:
+        run("recurring", "add", "100", "food", "tea", "--start", "2999-01-01")
+
+        assert "Removed recurring #1 · 100 UZS · food · monthly · tea" in run(
+            "recurring", "remove", "1"
+        )
+        assert "No recurring expenses" in run("recurring", "list")
+
+    def test_remove_missing(self) -> None:
+        assert "No recurring expense with id 3" in run("recurring", "remove", "3", ok=False)
+
+    def test_category_in_use_by_recurring_expense(self) -> None:
+        run("recurring", "add", "100", "other", "--start", "2999-01-01")
+
+        assert "used by 1 recurring expense" in run("category", "remove", "other", ok=False)

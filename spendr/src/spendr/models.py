@@ -1,8 +1,9 @@
 """Plain data containers shared by every layer. No behaviour, no SQL."""
 
+import calendar
 from dataclasses import dataclass
-from datetime import date, datetime
-from enum import Enum
+from datetime import date, datetime, timedelta
+from enum import Enum, StrEnum
 
 
 @dataclass(frozen=True, slots=True)
@@ -176,3 +177,77 @@ class BudgetReport:
     @property
     def is_empty(self) -> bool:
         return not self.lines and self.overall_budget is None
+
+
+class Frequency(StrEnum):
+    DAILY = "daily"
+    WEEKLY = "weekly"
+    MONTHLY = "monthly"
+    YEARLY = "yearly"
+
+
+def add_months(start: date, months: int) -> date:
+    """Shift a date by whole months, clamping to the month's last day.
+
+    >>> add_months(date(2026, 1, 31), 1)
+    datetime.date(2026, 2, 28)
+    """
+    index = start.year * 12 + (start.month - 1) + months
+    year, month = divmod(index, 12)
+    last_day = calendar.monthrange(year, month + 1)[1]
+    return date(year, month + 1, min(start.day, last_day))
+
+
+@dataclass(frozen=True, slots=True)
+class RecurringExpense:
+    """A template that becomes a real expense every time it falls due."""
+
+    id: int
+    amount: int
+    category_id: int
+    category: str
+    note: str
+    frequency: Frequency
+    start_date: date
+    end_date: date | None
+    last_posted: date | None
+    """Date of the most recent occurrence already recorded as an expense."""
+
+    def occurrence(self, index: int) -> date:
+        """The ``index``-th due date, counted from the start date.
+
+        Always derived from the start date, so a rule that starts on the 31st
+        returns to the 31st after a shorter month instead of drifting.
+        """
+        match self.frequency:
+            case Frequency.DAILY:
+                return self.start_date + timedelta(days=index)
+            case Frequency.WEEKLY:
+                return self.start_date + timedelta(weeks=index)
+            case Frequency.MONTHLY:
+                return add_months(self.start_date, index)
+            case Frequency.YEARLY:
+                return add_months(self.start_date, index * 12)
+
+    def due_dates(self, until: date) -> list[date]:
+        """Occurrences not yet recorded, up to and including ``until``."""
+        limit = min(until, self.end_date) if self.end_date else until
+        dates: list[date] = []
+        index = 0
+        while (due := self.occurrence(index)) <= limit:
+            if self.last_posted is None or due > self.last_posted:
+                dates.append(due)
+            index += 1
+        return dates
+
+    @property
+    def next_due(self) -> date | None:
+        """The next occurrence still to be recorded; ``None`` once the rule has ended."""
+        index = 0
+        while True:
+            due = self.occurrence(index)
+            if self.end_date and due > self.end_date:
+                return None
+            if self.last_posted is None or due > self.last_posted:
+                return due
+            index += 1
