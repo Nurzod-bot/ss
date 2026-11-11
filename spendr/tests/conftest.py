@@ -4,7 +4,7 @@ from pathlib import Path
 
 import pytest
 
-from spendr import db
+from spendr import config, db
 from spendr.repository import BudgetRepository, CategoryRepository, ExpenseRepository
 
 
@@ -33,3 +33,15 @@ def expenses(conn: sqlite3.Connection) -> ExpenseRepository:
 @pytest.fixture
 def budgets(conn: sqlite3.Connection) -> BudgetRepository:
     return BudgetRepository(conn)
+
+
+@pytest.fixture(autouse=True)
+def cli_env(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> Path:
+    """Point the app at a throwaway database and config file.
+
+    Applied to every test so that nothing can ever touch the real user data.
+    """
+    monkeypatch.setenv(config.DB_ENV_VAR, str(tmp_path / "cli.db"))
+    monkeypatch.setenv(config.CONFIG_ENV_VAR, str(tmp_path / "config.json"))
+    monkeypatch.setenv("COLUMNS", "120")
+    return tmp_path

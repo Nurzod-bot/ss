@@ -8,6 +8,10 @@ class SpendrError(Exception):
     """Base class for all expected, user-facing errors."""
 
 
+class ValidationError(SpendrError):
+    """User input is malformed or out of range."""
+
+
 class NotFoundError(SpendrError):
     """A requested record does not exist."""
 
