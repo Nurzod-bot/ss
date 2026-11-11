@@ -1,3 +1,4 @@
+import dataclasses
 import sqlite3
 from datetime import date
 
@@ -5,8 +6,14 @@ import pytest
 
 from spendr import db, services
 from spendr.errors import CategoryInUseError, DuplicateError, NotFoundError, ValidationError
-from spendr.models import BudgetState
-from spendr.services import BudgetService, CategoryService, ExpenseService, SummaryService
+from spendr.models import BudgetState, Frequency, RecurringExpense
+from spendr.services import (
+    BudgetService,
+    CategoryService,
+    ExpenseService,
+    RecurringService,
+    SummaryService,
+)
 
 NOV_11 = date(2026, 11, 11)
 
@@ -29,6 +36,11 @@ def summaries(conn: sqlite3.Connection) -> SummaryService:
 @pytest.fixture
 def budgets(conn: sqlite3.Connection) -> BudgetService:
     return BudgetService(conn)
+
+
+@pytest.fixture
+def recurring(conn: sqlite3.Connection) -> RecurringService:
+    return RecurringService(conn)
 
 
 class TestParseAmount:
@@ -542,3 +554,134 @@ class TestBudgetService:
         categories.rename("food", "groceries")
 
         assert [line.category for line in budgets.status("2026-11").lines] == ["groceries"]
+
+
+class TestRecurringService:
+    def test_add(self, recurring: RecurringService) -> None:
+        rule = recurring.add("1 250 000", "Housing", " rent ", start="2026-11-01", end="2027-10-31")
+
+        assert (rule.amount, rule.category, rule.note) == (1_250_000, "housing", "rent")
+        assert rule.frequency is Frequency.MONTHLY
+        assert (rule.start_date, rule.end_date) == (date(2026, 11, 1), date(2027, 10, 31))
+        assert rule.last_posted is None
+        assert recurring.list_all() == [rule]
+
+    def test_add_defaults_to_today_without_end(self, recurring: RecurringService) -> None:
+        rule = recurring.add("100", "food", frequency=Frequency.WEEKLY)
+
+        assert rule.start_date == date.today()
+        assert rule.end_date is None
+
+    @pytest.mark.parametrize(
+        ("kwargs", "error", "message"),
+        [
+            ({"amount": "0", "category": "food"}, ValidationError, "greater than zero"),
+            ({"amount": "1.5", "category": "food"}, ValidationError, "Invalid amount"),
+            ({"amount": "100", "category": "pets"}, NotFoundError, "Unknown category"),
+            (
+                {"amount": "100", "category": "food", "start": "soon"},
+                ValidationError,
+                "Invalid date",
+            ),
+            (
+                {"amount": "100", "category": "food", "start": "2026-11-10", "end": "2026-11-09"},
+                ValidationError,
+                "must not be before",
+            ),
+        ],
+    )
+    def test_add_invalid(
+        self,
+        recurring: RecurringService,
+        kwargs: dict[str, str],
+        error: type[Exception],
+        message: str,
+    ) -> None:
+        with pytest.raises(error, match=message):
+            recurring.add(**kwargs)  # type: ignore[arg-type]
+
+        assert recurring.list_all() == []
+
+    def test_end_on_start_date_is_allowed(self, recurring: RecurringService) -> None:
+        rule = recurring.add("100", "food", start="2026-11-10", end="2026-11-10")
+
+        assert rule.due_dates(date(2027, 1, 1)) == [date(2026, 11, 10)]
+
+    def test_apply_due_records_each_occurrence_once(
+        self, recurring: RecurringService, service: ExpenseService
+    ) -> None:
+        recurring.add("1250000", "housing", "rent", start="2026-09-01")
+
+        assert recurring.apply_due(NOV_11) == 3
+        assert recurring.apply_due(NOV_11) == 0
+        assert [(e.spent_on.isoformat(), e.amount, e.category, e.note) for e in service.find()] == [
+            ("2026-11-01", 1_250_000, "housing", "rent"),
+            ("2026-10-01", 1_250_000, "housing", "rent"),
+            ("2026-09-01", 1_250_000, "housing", "rent"),
+        ]
+        assert recurring.list_all()[0].last_posted == date(2026, 11, 1)
+
+    def test_apply_due_picks_up_where_it_left_off(
+        self, recurring: RecurringService, service: ExpenseService
+    ) -> None:
+        recurring.add("100", "food", frequency=Frequency.DAILY, start="2026-11-10")
+
+        assert recurring.apply_due(NOV_11) == 2
+        assert recurring.apply_due(date(2026, 11, 14)) == 3
+        assert len(service.find()) == 5
+
+    def test_apply_due_with_several_rules(
+        self, recurring: RecurringService, service: ExpenseService
+    ) -> None:
+        recurring.add("100", "food", start="2026-11-01")
+        recurring.add("7", "transport", frequency=Frequency.WEEKLY, start="2026-11-01")
+        recurring.add("9", "health", start="2026-12-01")
+
+        assert recurring.apply_due(NOV_11) == 3
+        assert sorted(e.category for e in service.find()) == ["food", "transport", "transport"]
+
+    def test_apply_due_respects_end_date(self, recurring: RecurringService) -> None:
+        recurring.add("100", "food", start="2026-08-15", end="2026-09-30")
+
+        assert recurring.apply_due(NOV_11) == 2
+        assert recurring.list_all()[0].next_due is None
+
+    def test_apply_due_without_rules(self, recurring: RecurringService) -> None:
+        assert recurring.apply_due(NOV_11) == 0
+
+    def test_remove_keeps_recorded_expenses(
+        self, recurring: RecurringService, service: ExpenseService
+    ) -> None:
+        rule = recurring.add("100", "food", start="2026-11-01")
+        recurring.apply_due(NOV_11)
+
+        assert recurring.remove(rule.id) == recurring_with_last_posted(rule, date(2026, 11, 1))
+        assert recurring.list_all() == []
+        assert len(service.find()) == 1
+
+    def test_remove_missing(self, recurring: RecurringService) -> None:
+        with pytest.raises(NotFoundError, match="No recurring expense with id 4"):
+            recurring.remove(4)
+
+    def test_category_rename_follows(
+        self, recurring: RecurringService, categories: CategoryService
+    ) -> None:
+        recurring.add("100", "food")
+        categories.rename("food", "groceries")
+
+        assert recurring.list_all()[0].category == "groceries"
+
+    def test_category_with_recurring_expense_cannot_be_removed(
+        self, recurring: RecurringService, categories: CategoryService
+    ) -> None:
+        rule = recurring.add("100", "other", start="2030-01-01")
+
+        with pytest.raises(CategoryInUseError, match="used by 1 recurring expense"):
+            categories.remove("other")
+
+        recurring.remove(rule.id)
+        assert categories.remove("other").name == "other"
+
+
+def recurring_with_last_posted(rule: RecurringExpense, last_posted: date) -> RecurringExpense:
+    return dataclasses.replace(rule, last_posted=last_posted)

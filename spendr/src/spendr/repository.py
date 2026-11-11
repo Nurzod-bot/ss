@@ -16,6 +16,8 @@ from spendr.models import (
     CategoryUsage,
     Expense,
     ExpenseFilter,
+    Frequency,
+    RecurringExpense,
 )
 
 _EXPENSE_SELECT = """
@@ -317,3 +319,105 @@ class BudgetRepository:
             cursor = self._conn.execute("DELETE FROM monthly_budgets WHERE month = ?", (month,))
         if cursor.rowcount == 0:
             raise NotFoundError(f"No overall budget set for {month}.")
+
+
+_RECURRING_SELECT = """
+    SELECT r.id, r.amount, r.category_id, c.name AS category, r.note,
+           r.frequency, r.start_date, r.end_date, r.last_posted
+    FROM recurring_expenses AS r
+    JOIN categories AS c ON c.id = r.category_id
+"""
+
+
+def _optional_date(value: str | None) -> date | None:
+    return date.fromisoformat(value) if value else None
+
+
+def _recurring(row: sqlite3.Row) -> RecurringExpense:
+    return RecurringExpense(
+        id=int(row["id"]),
+        amount=int(row["amount"]),
+        category_id=int(row["category_id"]),
+        category=str(row["category"]),
+        note=str(row["note"]),
+        frequency=Frequency(row["frequency"]),
+        start_date=date.fromisoformat(row["start_date"]),
+        end_date=_optional_date(row["end_date"]),
+        last_posted=_optional_date(row["last_posted"]),
+    )
+
+
+class RecurringRepository:
+    def __init__(self, conn: sqlite3.Connection) -> None:
+        self._conn = conn
+
+    def add(
+        self,
+        amount: int,
+        category_id: int,
+        note: str,
+        frequency: Frequency,
+        start_date: date,
+        end_date: date | None,
+    ) -> RecurringExpense:
+        with self._conn:
+            cursor = self._conn.execute(
+                "INSERT INTO recurring_expenses "
+                "(amount, category_id, note, frequency, start_date, end_date) "
+                "VALUES (?, ?, ?, ?, ?, ?)",
+                (
+                    amount,
+                    category_id,
+                    note,
+                    frequency.value,
+                    start_date.isoformat(),
+                    end_date.isoformat() if end_date else None,
+                ),
+            )
+        assert cursor.lastrowid is not None
+        rule = self.get(cursor.lastrowid)
+        assert rule is not None
+        return rule
+
+    def get(self, rule_id: int) -> RecurringExpense | None:
+        row = self._conn.execute(f"{_RECURRING_SELECT} WHERE r.id = ?", (rule_id,)).fetchone()
+        return _recurring(row) if row else None
+
+    def list_all(self) -> list[RecurringExpense]:
+        rows = self._conn.execute(f"{_RECURRING_SELECT} ORDER BY r.id").fetchall()
+        return [_recurring(row) for row in rows]
+
+    def count_for_category(self, category_id: int) -> int:
+        row = self._conn.execute(
+            "SELECT COUNT(*) FROM recurring_expenses WHERE category_id = ?", (category_id,)
+        ).fetchone()
+        return int(row[0])
+
+    def remove(self, rule_id: int) -> None:
+        with self._conn:
+            cursor = self._conn.execute("DELETE FROM recurring_expenses WHERE id = ?", (rule_id,))
+        if cursor.rowcount == 0:
+            raise NotFoundError(f"No recurring expense with id {rule_id}.")
+
+    def post(self, rule: RecurringExpense, dates: Sequence[date]) -> int:
+        """Record one expense per due date and remember how far the rule has got.
+
+        Both happen in one transaction, so an occurrence is never recorded twice.
+        """
+        if not dates:
+            return 0
+        created_at = datetime.now(UTC).isoformat(timespec="seconds")
+        with self._conn:
+            self._conn.executemany(
+                "INSERT INTO expenses (amount, category_id, note, spent_on, created_at) "
+                "VALUES (?, ?, ?, ?, ?)",
+                [
+                    (rule.amount, rule.category_id, rule.note, due.isoformat(), created_at)
+                    for due in dates
+                ],
+            )
+            self._conn.execute(
+                "UPDATE recurring_expenses SET last_posted = ? WHERE id = ?",
+                (max(dates).isoformat(), rule.id),
+            )
+        return len(dates)

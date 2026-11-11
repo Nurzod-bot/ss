@@ -17,10 +17,17 @@ from spendr.models import (
     CategoryUsage,
     Expense,
     ExpenseFilter,
+    Frequency,
+    RecurringExpense,
     Summary,
     SummaryRow,
 )
-from spendr.repository import BudgetRepository, CategoryRepository, ExpenseRepository
+from spendr.repository import (
+    BudgetRepository,
+    CategoryRepository,
+    ExpenseRepository,
+    RecurringRepository,
+)
 
 MAX_AMOUNT = 2**63 - 1  # largest integer SQLite can store
 MAX_NOTE_LENGTH = 200
@@ -203,6 +210,7 @@ class ExpenseService:
 class CategoryService:
     def __init__(self, conn: sqlite3.Connection) -> None:
         self._categories = CategoryRepository(conn)
+        self._recurring = RecurringRepository(conn)
 
     def usage(self) -> list[CategoryUsage]:
         return self._categories.usage()
@@ -225,6 +233,13 @@ class CategoryService:
             raise CategoryInUseError(
                 f"Category '{category.name}' still has {count} expense{'s' if count != 1 else ''}. "
                 "Move them with `spendr edit ID --category NAME` or delete them first."
+            )
+        recurring = self._recurring.count_for_category(category.id)
+        if recurring:
+            raise CategoryInUseError(
+                f"Category '{category.name}' is used by {recurring} recurring "
+                f"expense{'s' if recurring != 1 else ''}. "
+                "Remove them first with `spendr recurring remove ID`."
             )
         self._categories.remove(category.id)
         return category
@@ -331,3 +346,53 @@ class BudgetService:
 
 def _month_or_current(month: str | None) -> str:
     return parse_month(month) if month is not None else current_month()
+
+
+class RecurringService:
+    def __init__(self, conn: sqlite3.Connection) -> None:
+        self._recurring = RecurringRepository(conn)
+        self._categories = CategoryRepository(conn)
+
+    def add(
+        self,
+        amount: str,
+        category: str,
+        note: str = "",
+        *,
+        frequency: Frequency = Frequency.MONTHLY,
+        start: str | None = None,
+        end: str | None = None,
+    ) -> RecurringExpense:
+        start_date = parse_date(start) if start is not None else date.today()
+        end_date = parse_date(end) if end is not None else None
+        if end_date is not None and end_date < start_date:
+            raise ValidationError(f"--end ({end_date}) must not be before --start ({start_date}).")
+        return self._recurring.add(
+            amount=parse_amount(amount),
+            category_id=find_category(self._categories, category).id,
+            note=clean_note(note),
+            frequency=frequency,
+            start_date=start_date,
+            end_date=end_date,
+        )
+
+    def list_all(self) -> list[RecurringExpense]:
+        return self._recurring.list_all()
+
+    def remove(self, rule_id: int) -> RecurringExpense:
+        """Stop a recurring expense. Expenses it already recorded are kept."""
+        rule = self._recurring.get(rule_id)
+        if rule is None:
+            raise NotFoundError(f"No recurring expense with id {rule_id}.")
+        self._recurring.remove(rule_id)
+        return rule
+
+    def apply_due(self, today: date | None = None) -> int:
+        """Record every occurrence that has fallen due. Returns how many were added.
+
+        Safe to call as often as you like: each occurrence is recorded once.
+        """
+        today = today or date.today()
+        return sum(
+            self._recurring.post(rule, rule.due_dates(today)) for rule in self._recurring.list_all()
+        )

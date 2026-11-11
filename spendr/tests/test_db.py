@@ -109,6 +109,30 @@ def test_file_that_is_not_a_database_gives_friendly_error(tmp_path: Path) -> Non
         db.connect(path)
 
 
+@pytest.mark.parametrize(
+    ("column", "value"),
+    [("amount", 0), ("frequency", "hourly"), ("start_date", "2026-02-30"), ("end_date", "soon")],
+)
+def test_schema_rejects_invalid_recurring_expenses(
+    conn: sqlite3.Connection, column: str, value: object
+) -> None:
+    row: dict[str, object] = {
+        "amount": 100,
+        "category_id": 1,
+        "frequency": "monthly",
+        "start_date": "2026-11-01",
+        "end_date": None,
+    }
+    row[column] = value
+
+    with pytest.raises(sqlite3.IntegrityError):
+        conn.execute(
+            "INSERT INTO recurring_expenses (amount, category_id, frequency, start_date, end_date) "
+            "VALUES (:amount, :category_id, :frequency, :start_date, :end_date)",
+            row,
+        )
+
+
 def test_in_memory_database_is_supported() -> None:
     connection = db.connect(":memory:")
 
