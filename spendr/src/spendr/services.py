@@ -8,12 +8,20 @@ import re
 import sqlite3
 from datetime import date
 
-from spendr.errors import NotFoundError, ValidationError
-from spendr.models import Category, Expense, ExpenseFilter
+from spendr.errors import CategoryInUseError, NotFoundError, ValidationError
+from spendr.models import (
+    Category,
+    CategoryUsage,
+    Expense,
+    ExpenseFilter,
+    Summary,
+    SummaryRow,
+)
 from spendr.repository import CategoryRepository, ExpenseRepository
 
 MAX_AMOUNT = 2**63 - 1  # largest integer SQLite can store
 MAX_NOTE_LENGTH = 200
+MAX_CATEGORY_LENGTH = 30
 
 _AMOUNT_RE = re.compile(r"[+-]?[0-9]+")
 _DATE_RE = re.compile(r"[0-9]{4}-[0-9]{2}-[0-9]{2}")
@@ -61,6 +69,36 @@ def month_range(month: str) -> tuple[date, date]:
     year, month_number = (int(part) for part in parse_month(month).split("-"))
     last_day = calendar.monthrange(year, month_number)[1]
     return date(year, month_number, 1), date(year, month_number, last_day)
+
+
+def current_month() -> str:
+    return date.today().strftime("%Y-%m")
+
+
+def clean_category_name(text: str) -> str:
+    """Normalize a category name: trimmed, single-spaced and lower-case."""
+    name = " ".join(text.split()).lower()
+    if not name:
+        raise ValidationError("Category name cannot be empty.")
+    if len(name) > MAX_CATEGORY_LENGTH:
+        raise ValidationError(f"Category name is too long (max {MAX_CATEGORY_LENGTH} characters).")
+    if not all(ch.isalnum() or ch in " -_&" for ch in name):
+        raise ValidationError(
+            f"Invalid category name '{text}': use letters, digits, spaces, '-', '_' or '&'."
+        )
+    return name
+
+
+def find_category(categories: CategoryRepository, name: str) -> Category:
+    """Look a category up by name, with a helpful error when it does not exist."""
+    category = categories.get_by_name(" ".join(name.split()).lower())
+    if category is None:
+        available = ", ".join(c.name for c in categories.list_all()) or "none yet"
+        raise NotFoundError(
+            f"Unknown category '{name}'. Available: {available}. "
+            "Create one with: spendr category add NAME"
+        )
+    return category
 
 
 def clean_note(text: str) -> str:
@@ -156,8 +194,60 @@ class ExpenseService:
         return expense
 
     def _category(self, name: str) -> Category:
-        category = self._categories.get_by_name(name.strip())
-        if category is None:
-            available = ", ".join(c.name for c in self._categories.list_all()) or "none yet"
-            raise NotFoundError(f"Unknown category '{name}'. Available: {available}.")
+        return find_category(self._categories, name)
+
+
+class CategoryService:
+    def __init__(self, conn: sqlite3.Connection) -> None:
+        self._categories = CategoryRepository(conn)
+
+    def usage(self) -> list[CategoryUsage]:
+        return self._categories.usage()
+
+    def add(self, name: str) -> Category:
+        return self._categories.add(clean_category_name(name))
+
+    def rename(self, old_name: str, new_name: str) -> Category:
+        category = find_category(self._categories, old_name)
+        cleaned = clean_category_name(new_name)
+        if cleaned == category.name:
+            raise ValidationError(f"Category is already named '{cleaned}'.")
+        return self._categories.rename(category.id, cleaned)
+
+    def remove(self, name: str) -> Category:
+        """Delete an unused category (and its budgets) and return it."""
+        category = find_category(self._categories, name)
+        count = self._categories.expense_count(category.id)
+        if count:
+            raise CategoryInUseError(
+                f"Category '{category.name}' still has {count} expense{'s' if count != 1 else ''}. "
+                "Move them with `spendr edit ID --category NAME` or delete them first."
+            )
+        self._categories.remove(category.id)
         return category
+
+
+class SummaryService:
+    def __init__(self, conn: sqlite3.Connection) -> None:
+        self._expenses = ExpenseRepository(conn)
+
+    def for_month(self, month: str | None = None) -> Summary:
+        """Total spending per category for a month (the current one by default)."""
+        month = parse_month(month) if month is not None else current_month()
+        totals = self._expenses.totals_by_category(*month_range(month))
+        grand_total = sum(item.total for item in totals)
+        rows = [
+            SummaryRow(
+                category=item.category,
+                total=item.total,
+                count=item.count,
+                percent=item.total * 100 / grand_total,
+            )
+            for item in totals
+        ]
+        return Summary(
+            month=month,
+            rows=rows,
+            total=grand_total,
+            count=sum(item.count for item in totals),
+        )

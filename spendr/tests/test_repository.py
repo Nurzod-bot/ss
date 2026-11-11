@@ -41,6 +41,19 @@ class TestCategories:
         with pytest.raises(DuplicateError, match="already exists"):
             categories.add(name)
 
+    def test_usage_counts_expenses_per_category(
+        self, categories: CategoryRepository, expenses: ExpenseRepository
+    ) -> None:
+        food_id = category_id(categories, "food")
+        expenses.add(100, food_id, "", date(2026, 11, 1))
+        expenses.add(200, food_id, "", date(2026, 11, 2))
+
+        usage = {item.category.name: item.expense_count for item in categories.usage()}
+
+        assert usage["food"] == 2
+        assert usage["transport"] == 0
+        assert list(usage) == sorted(usage)
+
     def test_rename(self, categories: CategoryRepository) -> None:
         food_id = category_id(categories, "food")
 

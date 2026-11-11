@@ -12,8 +12,14 @@ from rich.markup import escape
 
 from spendr import __version__, config, db
 from spendr.errors import SpendrError
-from spendr.formatting import describe_expense, expenses_table
-from spendr.services import ExpenseService
+from spendr.formatting import (
+    categories_table,
+    describe_expense,
+    expenses_table,
+    summary_chart,
+    summary_table,
+)
+from spendr.services import CategoryService, ExpenseService, SummaryService
 
 app = typer.Typer(
     name="spendr",
@@ -23,6 +29,11 @@ app = typer.Typer(
     # User errors are reported as friendly messages, so never dump local variables.
     pretty_exceptions_show_locals=False,
 )
+
+category_app = typer.Typer(help="Manage expense categories.", no_args_is_help=True)
+config_app = typer.Typer(help="Show or change settings.", no_args_is_help=True)
+app.add_typer(category_app, name="category")
+app.add_typer(config_app, name="config")
 
 console = Console()
 err_console = Console(stderr=True)
@@ -34,18 +45,32 @@ class Session:
 
     currency: str
     expenses: ExpenseService
+    categories: CategoryService
+    summaries: SummaryService
+
+
+@contextmanager
+def friendly_errors() -> Iterator[None]:
+    """Report expected errors as a one-line message instead of a traceback."""
+    try:
+        yield
+    except SpendrError as exc:
+        err_console.print(f"[bold red]Error:[/] {escape(str(exc))}")
+        raise typer.Exit(code=1) from None
 
 
 @contextmanager
 def session() -> Iterator[Session]:
-    """Open the database for one command and turn expected errors into messages."""
-    try:
+    """Load settings and open the database for the duration of one command."""
+    with friendly_errors():
         settings = config.load_config()
         with closing(db.connect(config.db_path())) as conn:
-            yield Session(currency=settings.currency, expenses=ExpenseService(conn))
-    except SpendrError as exc:
-        err_console.print(f"[bold red]Error:[/] {escape(str(exc))}")
-        raise typer.Exit(code=1) from None
+            yield Session(
+                currency=settings.currency,
+                expenses=ExpenseService(conn),
+                categories=CategoryService(conn),
+                summaries=SummaryService(conn),
+            )
 
 
 def _version_callback(value: bool) -> None:
@@ -150,3 +175,84 @@ def delete(
             return
         s.expenses.delete(expense_id)
         console.print(f"[green]Deleted[/] {escape(summary)}")
+
+
+@app.command()
+def summary(
+    month: Annotated[
+        str | None,
+        typer.Option("--month", "-m", metavar="YYYY-MM", help="Defaults to the current month."),
+    ] = None,
+) -> None:
+    """Show spending per category for a month."""
+    with session() as s:
+        result = s.summaries.for_month(month)
+        if not result.rows:
+            console.print(f"No expenses in {result.month}.")
+            return
+        console.print(summary_table(result, s.currency))
+        console.print()
+        console.print(summary_chart(result))
+
+
+@category_app.command("list")
+def category_list() -> None:
+    """Show all categories and how many expenses each has."""
+    with session() as s:
+        usage = s.categories.usage()
+        if not usage:
+            console.print("No categories yet. Create one with: spendr category add NAME")
+            return
+        console.print(categories_table(usage))
+
+
+@category_app.command("add")
+def category_add(name: Annotated[str, typer.Argument(help="Name of the new category.")]) -> None:
+    """Create a category."""
+    with session() as s:
+        category = s.categories.add(name)
+        console.print(f"[green]Added[/] category '{escape(category.name)}'")
+
+
+@category_app.command("rename")
+def category_rename(
+    old_name: Annotated[str, typer.Argument(metavar="OLD", help="Current name.")],
+    new_name: Annotated[str, typer.Argument(metavar="NEW", help="New name.")],
+) -> None:
+    """Rename a category. Its expenses and budgets follow along."""
+    with session() as s:
+        category = s.categories.rename(old_name, new_name)
+        console.print(f"[green]Renamed[/] category to '{escape(category.name)}'")
+
+
+@category_app.command("remove")
+def category_remove(
+    name: Annotated[str, typer.Argument(help="Category to remove.")],
+) -> None:
+    """Remove a category that has no expenses. Its budgets are removed too."""
+    with session() as s:
+        category = s.categories.remove(name)
+        console.print(f"[green]Removed[/] category '{escape(category.name)}'")
+
+
+@config_app.command("show")
+def config_show() -> None:
+    """Show the current settings and where spendr keeps its files."""
+    with friendly_errors():
+        settings = config.load_config()
+    console.print(f"Currency:    {escape(settings.currency)}", highlight=False, soft_wrap=True)
+    console.print(
+        f"Config file: {escape(str(config.config_path()))}", highlight=False, soft_wrap=True
+    )
+    console.print(f"Database:    {escape(str(config.db_path()))}", highlight=False, soft_wrap=True)
+
+
+@config_app.command("currency")
+def config_currency(
+    code: Annotated[str, typer.Argument(help="Currency code shown next to amounts, e.g. USD.")],
+) -> None:
+    """Set the default currency."""
+    with friendly_errors():
+        settings = config.Config(currency=config.normalize_currency(code))
+        config.save_config(settings)
+    console.print(f"[green]Currency set to[/] {escape(settings.currency)}")

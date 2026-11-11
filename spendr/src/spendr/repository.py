@@ -8,7 +8,14 @@ import sqlite3
 from datetime import UTC, date, datetime
 
 from spendr.errors import CategoryInUseError, DuplicateError, NotFoundError
-from spendr.models import Budget, Category, CategoryTotal, Expense, ExpenseFilter
+from spendr.models import (
+    Budget,
+    Category,
+    CategoryTotal,
+    CategoryUsage,
+    Expense,
+    ExpenseFilter,
+)
 
 _EXPENSE_SELECT = """
     SELECT e.id, e.amount, e.category_id, c.name AS category, e.note, e.spent_on, e.created_at
@@ -78,6 +85,18 @@ class CategoryRepository:
     def list_all(self) -> list[Category]:
         rows = self._conn.execute("SELECT id, name FROM categories ORDER BY name").fetchall()
         return [_category(row) for row in rows]
+
+    def usage(self) -> list[CategoryUsage]:
+        """Every category with the number of expenses filed under it."""
+        rows = self._conn.execute(
+            "SELECT c.id, c.name, COUNT(e.id) AS expense_count "
+            "FROM categories AS c LEFT JOIN expenses AS e ON e.category_id = c.id "
+            "GROUP BY c.id ORDER BY c.name"
+        ).fetchall()
+        return [
+            CategoryUsage(category=_category(row), expense_count=int(row["expense_count"]))
+            for row in rows
+        ]
 
     def rename(self, category_id: int, new_name: str) -> Category:
         try:

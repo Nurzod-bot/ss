@@ -48,3 +48,27 @@ class CategoryTotal:
     category: str
     total: int
     count: int
+
+
+@dataclass(frozen=True, slots=True)
+class CategoryUsage:
+    category: Category
+    expense_count: int
+
+
+@dataclass(frozen=True, slots=True)
+class SummaryRow:
+    category: str
+    total: int
+    count: int
+    percent: float
+    """Share of the grand total, 0-100."""
+
+
+@dataclass(frozen=True, slots=True)
+class Summary:
+    month: str
+    rows: list[SummaryRow]
+    """One row per category with spending, largest first."""
+    total: int
+    count: int

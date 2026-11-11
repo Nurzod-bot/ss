@@ -4,8 +4,29 @@ from io import StringIO
 import pytest
 from rich.console import Console
 
-from spendr.formatting import describe_expense, expenses_table, format_amount
-from spendr.models import Expense
+from spendr.formatting import (
+    BAR_WIDTH,
+    bar_length,
+    categories_table,
+    describe_expense,
+    expenses_table,
+    format_amount,
+    format_percent,
+    summary_chart,
+    summary_table,
+)
+from spendr.models import Category, CategoryUsage, Expense, Summary, SummaryRow
+
+SUMMARY = Summary(
+    month="2026-11",
+    rows=[
+        SummaryRow(category="housing", total=1_250_000, count=1, percent=87.9),
+        SummaryRow(category="food", total=165_000, count=2, percent=11.6),
+        SummaryRow(category="transport", total=7_000, count=1, percent=0.5),
+    ],
+    total=1_422_000,
+    count=4,
+)
 
 
 def make_expense(expense_id: int = 1, amount: int = 45_000, note: str = "lunch plov") -> Expense:
@@ -71,3 +92,51 @@ def test_expenses_table_does_not_interpret_markup_in_notes() -> None:
     output = render(expenses_table([make_expense(note="[red]sale[/red] [50%]")], "UZS"))
 
     assert "[red]sale[/red] [50%]" in output
+
+
+@pytest.mark.parametrize(
+    ("percent", "expected"), [(0, "0.0%"), (11.649, "11.6%"), (87.95, "88.0%"), (100, "100.0%")]
+)
+def test_format_percent(percent: float, expected: str) -> None:
+    assert format_percent(percent) == expected
+
+
+def test_categories_table() -> None:
+    output = render(categories_table([CategoryUsage(Category(1, "food"), 12)]))
+
+    assert "food" in output
+    assert "12" in output
+
+
+def test_summary_table_shows_rows_and_grand_total() -> None:
+    lines = render(summary_table(SUMMARY, "UZS")).splitlines()
+
+    assert "Summary for 2026-11" in lines[0]
+    housing = next(line for line in lines if "housing" in line)
+    assert "1 250 000" in housing
+    assert "87.9%" in housing
+    total = next(line for line in lines if "Total" in line)
+    assert "1 422 000" in total
+    assert "100.0%" in total
+
+
+@pytest.mark.parametrize(
+    ("value", "largest", "expected"),
+    [(100, 100, BAR_WIDTH), (50, 100, BAR_WIDTH // 2), (1, 1_000_000, 1), (0, 100, 0), (0, 0, 0)],
+)
+def test_bar_length(value: int, largest: int, expected: int) -> None:
+    assert bar_length(value, largest) == expected
+
+
+def test_summary_chart_scales_bars_to_largest_category() -> None:
+    lines = render(summary_chart(SUMMARY)).splitlines()
+
+    bars = {line.split()[0]: line.count("█") for line in lines}
+    assert bars == {"housing": BAR_WIDTH, "food": 4, "transport": 1}
+    assert "87.9%" in lines[0]
+
+
+def test_summary_chart_of_empty_summary_renders_nothing() -> None:
+    empty = Summary(month="2026-11", rows=[], total=0, count=0)
+
+    assert render(summary_chart(empty)).strip() == ""

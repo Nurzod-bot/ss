@@ -27,7 +27,7 @@ class TestApp:
     def test_help_lists_commands(self) -> None:
         output = run("--help")
 
-        for command in ("add", "list", "edit", "delete"):
+        for command in ("add", "list", "edit", "delete", "summary", "category", "config"):
             assert command in output
 
     def test_no_arguments_shows_help(self) -> None:
@@ -220,3 +220,116 @@ class TestDelete:
 
         assert "No expense with id 42" in output
         assert "?" not in output
+
+
+class TestSummary:
+    def test_month_summary_with_chart(self) -> None:
+        run("add", "1250000", "housing", "rent", "-d", "2026-11-01")
+        run("add", "45000", "food", "lunch plov", "-d", "2026-11-10")
+        run("add", "120000", "food", "market", "-d", "2026-11-05")
+        run("add", "999", "food", "other month", "-d", "2026-12-01")
+
+        output = run("summary", "--month", "2026-11")
+
+        assert "Summary for 2026-11" in output
+        assert "1 250 000" in output
+        assert "165 000" in output
+        assert "1 415 000" in output
+        assert "88.3%" in output
+        assert "11.7%" in output
+        assert "█" in output
+        assert output.index("housing") < output.index("food")
+
+    def test_defaults_to_current_month(self) -> None:
+        run("add", "100", "food")
+
+        assert f"Summary for {date.today():%Y-%m}" in run("summary")
+
+    def test_empty_month(self) -> None:
+        assert "No expenses in 2026-11." in run("summary", "-m", "2026-11")
+
+    def test_invalid_month(self) -> None:
+        assert "Invalid month 'november'" in run("summary", "-m", "november", ok=False)
+
+
+class TestCategory:
+    def test_list_shows_defaults_with_counts(self) -> None:
+        run("add", "100", "food")
+
+        output = run("category", "list")
+
+        assert "transport" in output
+        food_line = next(line for line in output.splitlines() if "food" in line)
+        assert "1" in food_line
+
+    def test_add_then_use(self) -> None:
+        assert "Added category 'pets'" in run("category", "add", "Pets")
+        assert "pets" in run("add", "100", "pets")
+
+    @pytest.mark.parametrize(
+        ("name", "message"),
+        [("food", "already exists"), ("  ", "cannot be empty"), ("a/b", "Invalid category name")],
+    )
+    def test_add_invalid(self, name: str, message: str) -> None:
+        assert message in run("category", "add", name, ok=False)
+
+    def test_rename(self) -> None:
+        run("add", "100", "food", "tea")
+
+        assert "Renamed category to 'groceries'" in run("category", "rename", "food", "groceries")
+        assert "groceries" in run("list")
+
+    @pytest.mark.parametrize(
+        ("args", "message"),
+        [
+            (["pets", "animals"], "Unknown category 'pets'"),
+            (["food", "transport"], "already exists"),
+            (["food", "Food"], "already named"),
+        ],
+    )
+    def test_rename_invalid(self, args: list[str], message: str) -> None:
+        assert message in run("category", "rename", *args, ok=False)
+
+    def test_remove(self) -> None:
+        assert "Removed category 'other'" in run("category", "remove", "other")
+        assert "other" not in run("category", "list")
+
+    def test_remove_in_use_is_refused(self) -> None:
+        run("add", "100", "food")
+
+        assert "still has 1 expense" in run("category", "remove", "food", ok=False)
+        assert "food" in run("category", "list")
+
+    def test_remove_unknown(self) -> None:
+        assert "Unknown category" in run("category", "remove", "pets", ok=False)
+
+    def test_list_when_all_removed(self) -> None:
+        for line in run("category", "list").splitlines():
+            cells = [cell.strip() for cell in line.split("│") if cell.strip()]
+            if len(cells) == 2 and cells[1] == "0":
+                run("category", "remove", cells[0])
+
+        assert "No categories yet" in run("category", "list")
+
+
+class TestConfig:
+    def test_show_defaults(self, cli_env: Path) -> None:
+        output = run("config", "show")
+
+        assert "UZS" in output
+        assert str(cli_env / "config.json") in output
+        assert str(cli_env / "cli.db") in output
+
+    def test_set_currency(self) -> None:
+        assert "Currency set to USD" in run("config", "currency", "usd")
+        assert "USD" in run("config", "show")
+        assert "100 USD" in run("add", "100", "food")
+
+    def test_invalid_currency(self) -> None:
+        assert "Invalid currency" in run("config", "currency", "US D", ok=False)
+        assert "UZS" in run("config", "show")
+
+    def test_show_with_broken_config(self, cli_env: Path) -> None:
+        (cli_env / "config.json").write_text("[]")
+
+        assert "must contain a JSON object" in run("config", "show", ok=False)

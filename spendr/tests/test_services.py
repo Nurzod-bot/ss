@@ -3,14 +3,24 @@ from datetime import date
 
 import pytest
 
-from spendr import services
-from spendr.errors import NotFoundError, ValidationError
-from spendr.services import ExpenseService
+from spendr import db, services
+from spendr.errors import CategoryInUseError, DuplicateError, NotFoundError, ValidationError
+from spendr.services import CategoryService, ExpenseService, SummaryService
 
 
 @pytest.fixture
 def service(conn: sqlite3.Connection) -> ExpenseService:
     return ExpenseService(conn)
+
+
+@pytest.fixture
+def categories(conn: sqlite3.Connection) -> CategoryService:
+    return CategoryService(conn)
+
+
+@pytest.fixture
+def summaries(conn: sqlite3.Connection) -> SummaryService:
+    return SummaryService(conn)
 
 
 class TestParseAmount:
@@ -123,8 +133,13 @@ class TestExpenseService:
         assert expense.note == ""
 
     def test_add_unknown_category_lists_available_ones(self, service: ExpenseService) -> None:
-        with pytest.raises(NotFoundError, match=r"Unknown category 'pets'\. Available: .*food"):
+        with pytest.raises(NotFoundError) as excinfo:
             service.add("100", "pets")
+
+        message = str(excinfo.value)
+        assert "Unknown category 'pets'" in message
+        assert "food" in message
+        assert "spendr category add" in message
 
     def test_add_invalid_input_stores_nothing(self, service: ExpenseService) -> None:
         for args in [("-5", "food"), ("100", "pets"), ("100", "food", "", "2026-13-01")]:
@@ -206,3 +221,158 @@ class TestExpenseService:
     def test_delete_missing_expense(self, service: ExpenseService) -> None:
         with pytest.raises(NotFoundError):
             service.delete(1)
+
+
+class TestCleanCategoryName:
+    @pytest.mark.parametrize(
+        ("text", "expected"),
+        [("Food", "food"), ("  Pets  &   Vet ", "pets & vet"), ("eating-out_2", "eating-out_2")],
+    )
+    def test_valid(self, text: str, expected: str) -> None:
+        assert services.clean_category_name(text) == expected
+
+    def test_non_ascii_letters_are_allowed(self) -> None:
+        assert services.clean_category_name("Озиқ-овқат") == "озиқ-овқат"
+
+    @pytest.mark.parametrize("text", ["", "   "])
+    def test_empty(self, text: str) -> None:
+        with pytest.raises(ValidationError, match="cannot be empty"):
+            services.clean_category_name(text)
+
+    def test_too_long(self) -> None:
+        with pytest.raises(ValidationError, match="too long"):
+            services.clean_category_name("x" * (services.MAX_CATEGORY_LENGTH + 1))
+
+    @pytest.mark.parametrize("text", ["a/b", "food!", "[red]", "a,b"])
+    def test_invalid_characters(self, text: str) -> None:
+        with pytest.raises(ValidationError, match="Invalid category name"):
+            services.clean_category_name(text)
+
+
+class TestCategoryService:
+    def test_usage_starts_with_defaults(self, categories: CategoryService) -> None:
+        names = [item.category.name for item in categories.usage()]
+
+        assert names == sorted(db.DEFAULT_CATEGORIES)
+
+    def test_add_normalizes_name(self, categories: CategoryService) -> None:
+        assert categories.add("  Pets ").name == "pets"
+
+    @pytest.mark.parametrize("name", ["food", "FOOD", " Food "])
+    def test_add_duplicate(self, categories: CategoryService, name: str) -> None:
+        with pytest.raises(DuplicateError, match="'food' already exists"):
+            categories.add(name)
+
+    def test_add_duplicate_non_ascii_name_ignoring_case(self, categories: CategoryService) -> None:
+        categories.add("Еда")
+
+        with pytest.raises(DuplicateError):
+            categories.add("ЕДА")
+
+    def test_rename_keeps_expenses(
+        self, categories: CategoryService, service: ExpenseService
+    ) -> None:
+        expense = service.add("100", "food")
+
+        renamed = categories.rename("Food", "Groceries")
+
+        assert renamed.name == "groceries"
+        assert service.get(expense.id).category == "groceries"
+
+    def test_rename_unknown_category(self, categories: CategoryService) -> None:
+        with pytest.raises(NotFoundError, match="Unknown category 'pets'"):
+            categories.rename("pets", "animals")
+
+    def test_rename_to_existing_name(self, categories: CategoryService) -> None:
+        with pytest.raises(DuplicateError, match="'transport' already exists"):
+            categories.rename("food", "transport")
+
+    def test_rename_to_same_name(self, categories: CategoryService) -> None:
+        with pytest.raises(ValidationError, match="already named 'food'"):
+            categories.rename("food", "FOOD")
+
+    def test_rename_to_invalid_name(self, categories: CategoryService) -> None:
+        with pytest.raises(ValidationError, match="cannot be empty"):
+            categories.rename("food", " ")
+
+    def test_remove_unused(self, categories: CategoryService) -> None:
+        assert categories.remove("Other").name == "other"
+        assert "other" not in [item.category.name for item in categories.usage()]
+
+    def test_remove_unknown(self, categories: CategoryService) -> None:
+        with pytest.raises(NotFoundError):
+            categories.remove("pets")
+
+    @pytest.mark.parametrize(("count", "phrase"), [(1, "1 expense."), (2, "2 expenses.")])
+    def test_remove_in_use(
+        self, categories: CategoryService, service: ExpenseService, count: int, phrase: str
+    ) -> None:
+        for _ in range(count):
+            service.add("100", "food")
+
+        with pytest.raises(CategoryInUseError) as excinfo:
+            categories.remove("food")
+
+        assert f"'food' still has {phrase}" in str(excinfo.value)
+
+    def test_all_categories_can_be_removed(
+        self, categories: CategoryService, service: ExpenseService
+    ) -> None:
+        for name in db.DEFAULT_CATEGORIES:
+            categories.remove(name)
+
+        assert categories.usage() == []
+        with pytest.raises(NotFoundError, match="Available: none yet"):
+            service.add("100", "food")
+
+
+class TestSummaryService:
+    def test_empty_month(self, summaries: SummaryService) -> None:
+        summary = summaries.for_month("2026-11")
+
+        assert summary.month == "2026-11"
+        assert summary.rows == []
+        assert summary.total == 0
+        assert summary.count == 0
+
+    def test_defaults_to_current_month(
+        self, summaries: SummaryService, service: ExpenseService
+    ) -> None:
+        service.add("100", "food")
+
+        summary = summaries.for_month()
+
+        assert summary.month == services.current_month()
+        assert summary.total == 100
+
+    def test_totals_and_percentages(
+        self, summaries: SummaryService, service: ExpenseService
+    ) -> None:
+        service.add("250", "food", "", "2026-11-01")
+        service.add("250", "food", "", "2026-11-30")
+        service.add("1500", "housing", "", "2026-11-15")
+        service.add("9999", "food", "", "2026-10-31")
+        service.add("9999", "food", "", "2026-12-01")
+
+        summary = summaries.for_month("2026-11")
+
+        assert [(r.category, r.total, r.count, r.percent) for r in summary.rows] == [
+            ("housing", 1500, 1, 75.0),
+            ("food", 500, 2, 25.0),
+        ]
+        assert summary.total == 2000
+        assert summary.count == 3
+
+    def test_percentages_sum_to_one_hundred(
+        self, summaries: SummaryService, service: ExpenseService
+    ) -> None:
+        for category in ("food", "transport", "health"):
+            service.add("1", category, "", "2026-11-01")
+
+        summary = summaries.for_month("2026-11")
+
+        assert sum(row.percent for row in summary.rows) == pytest.approx(100)
+
+    def test_invalid_month(self, summaries: SummaryService) -> None:
+        with pytest.raises(ValidationError, match="Invalid month"):
+            summaries.for_month("2026-13")
