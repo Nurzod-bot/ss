@@ -75,6 +75,7 @@ files = ["src", "tests"]
 [tool.pytest.ini_options]
 testpaths = ["tests"]
 addopts = "--strict-markers --strict-config"
+filterwarnings = ["error"]
 
 [tool.coverage.run]
 source = ["spendr"]
