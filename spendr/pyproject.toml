@@ -28,6 +28,10 @@ dependencies = [
     "platformdirs>=4.2",
 ]
 
+[project.urls]
+Repository = "https://github.com/Nurzod-bot/ss"
+Issues = "https://github.com/Nurzod-bot/ss/issues"
+
 [project.optional-dependencies]
 dev = [
     "pytest>=8.0",

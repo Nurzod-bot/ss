@@ -42,8 +42,9 @@ app.add_typer(category_app, name="category")
 app.add_typer(budget_app, name="budget")
 app.add_typer(config_app, name="config")
 
-console = Console()
-err_console = Console(stderr=True)
+# Automatic highlighting would colour digits and paths inconsistently; all styling is explicit.
+console = Console(highlight=False)
+err_console = Console(stderr=True, highlight=False)
 
 
 @dataclass(frozen=True, slots=True)
@@ -242,7 +243,6 @@ def export(
         console.print(
             f"[green]Exported[/] {count} expense{'s' if count != 1 else ''} "
             f"to {escape(str(output))}",
-            highlight=False,
             soft_wrap=True,
         )
 
@@ -285,7 +285,7 @@ def import_expenses(
             details.append(f"{verb} categories: {escape(names)}")
         if details:
             message += f" ({'; '.join(details)})"
-        console.print(message, highlight=False)
+        console.print(message)
 
 
 @category_app.command("list")
@@ -403,7 +403,6 @@ def budget_status(month: MonthOption = None) -> None:
                 f"No budgets set for {report.month}. Start with:\n"
                 "  spendr budget set CATEGORY AMOUNT\n"
                 "  spendr budget total AMOUNT",
-                highlight=False,
             )
             return
         if report.lines:
@@ -416,11 +415,9 @@ def config_show() -> None:
     """Show the current settings and where spendr keeps its files."""
     with friendly_errors():
         settings = config.load_config()
-    console.print(f"Currency:    {escape(settings.currency)}", highlight=False, soft_wrap=True)
-    console.print(
-        f"Config file: {escape(str(config.config_path()))}", highlight=False, soft_wrap=True
-    )
-    console.print(f"Database:    {escape(str(config.db_path()))}", highlight=False, soft_wrap=True)
+    console.print(f"Currency:    {escape(settings.currency)}", soft_wrap=True)
+    console.print(f"Config file: {escape(str(config.config_path()))}", soft_wrap=True)
+    console.print(f"Database:    {escape(str(config.db_path()))}", soft_wrap=True)
 
 
 @config_app.command("currency")

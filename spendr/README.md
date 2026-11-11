@@ -7,7 +7,6 @@
 A fast, friendly command-line expense tracker. Log what you spend, organise it by
 category, set budgets, and see where the money went — without leaving the terminal.
 
-<!-- TODO: record a demo and save it as docs/demo.gif -->
 ![spendr demo](docs/demo.gif)
 
 ## Features
