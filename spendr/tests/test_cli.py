@@ -1,3 +1,4 @@
+import json
 from datetime import date
 from pathlib import Path
 
@@ -27,7 +28,18 @@ class TestApp:
     def test_help_lists_commands(self) -> None:
         output = run("--help")
 
-        for command in ("add", "list", "edit", "delete", "summary", "category", "budget", "config"):
+        for command in (
+            "add",
+            "list",
+            "edit",
+            "delete",
+            "summary",
+            "category",
+            "budget",
+            "config",
+            "export",
+            "import",
+        ):
             assert command in output
 
     def test_no_arguments_shows_help(self) -> None:
@@ -444,3 +456,140 @@ class TestBudget:
 
     def test_status_invalid_month(self) -> None:
         assert "Invalid month" in run("budget", "status", "-m", "soon", ok=False)
+
+
+class TestExport:
+    @pytest.fixture(autouse=True)
+    def _seed(self, cli_env: Path) -> None:
+        run("add", "45000", "food", "lunch plov", "-d", "2026-11-10")
+        run("add", "1250000", "housing", "rent", "-d", "2026-12-01")
+
+    def test_csv_to_stdout_by_default(self) -> None:
+        assert run("export").splitlines() == [
+            "id,date,category,amount,note",
+            "1,2026-11-10,food,45000,lunch plov",
+            "2,2026-12-01,housing,1250000,rent",
+        ]
+
+    def test_json_to_stdout(self) -> None:
+        records = json.loads(run("export", "--format", "json"))
+
+        assert [record["amount"] for record in records] == [45_000, 1_250_000]
+
+    def test_csv_to_file(self, cli_env: Path) -> None:
+        path = cli_env / "out.csv"
+
+        output = run("export", "--format", "csv", "--output", str(path))
+
+        assert "Exported 2 expenses to" in output
+        assert path.read_text().count("\n") == 3
+
+    def test_json_to_file_with_filter(self, cli_env: Path) -> None:
+        path = cli_env / "out.json"
+
+        output = run("export", "-f", "json", "-o", str(path), "--month", "2026-11")
+
+        assert "Exported 1 expense to" in output
+        assert [record["note"] for record in json.loads(path.read_text())] == ["lunch plov"]
+
+    def test_existing_file_needs_force(self, cli_env: Path) -> None:
+        path = cli_env / "out.csv"
+        path.write_text("precious")
+
+        assert "already exists. Use --force" in run("export", "-o", str(path), ok=False)
+        assert path.read_text() == "precious"
+
+        run("export", "-o", str(path), "--force")
+        assert path.read_text().startswith("id,date")
+
+    @pytest.mark.parametrize(
+        ("args", "message"),
+        [
+            (["--format", "xml"], "Invalid value"),
+            (["--month", "2026-13"], "Invalid month"),
+            (["--category", "pets"], "Unknown category"),
+            (["--from", "2026-12-01", "--to", "2026-11-01"], "must not be after"),
+        ],
+    )
+    def test_invalid_options(self, args: list[str], message: str) -> None:
+        assert message in run("export", *args, ok=False)
+
+
+def test_export_empty_database() -> None:
+    assert run("export") == "id,date,category,amount,note\n"
+    assert run("export", "-f", "json") == "[]\n"
+
+
+class TestImport:
+    def write(self, folder: Path, content: str) -> str:
+        path = folder / "in.csv"
+        path.write_text(content, encoding="utf-8")
+        return str(path)
+
+    def test_import(self, cli_env: Path) -> None:
+        path = self.write(cli_env, "date,category,amount,note\n2026-11-10,food,45000,lunch plov\n")
+
+        assert "Imported 1 expense" in run("import", path)
+        assert "lunch plov" in run("list")
+
+    def test_export_then_import_into_fresh_database(
+        self, cli_env: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        run("add", "45000", "food", "lunch plov", "-d", "2026-11-10")
+        run("add", "7000", "transport", "taxi", "-d", "2026-11-03")
+        exported = cli_env / "backup.csv"
+        run("export", "-o", str(exported))
+
+        monkeypatch.setenv("SPENDR_DB", str(cli_env / "fresh.db"))
+        output = run("import", str(exported))
+
+        assert "Imported 2 expenses" in output
+        assert "total 52 000 UZS" in run("list")
+
+    def test_invalid_rows(self, cli_env: Path) -> None:
+        path = self.write(cli_env, "date,category,amount\n2026-02-30,food,1\n2026-11-10,food,-1\n")
+
+        output = run("import", path, ok=False)
+
+        assert "2 invalid rows" in output
+        assert "line 2: Invalid date '2026-02-30'" in output
+        assert "line 3: Amount must be greater than zero" in output
+        assert "No expenses found." in run("list")
+
+    def test_unknown_category_then_create(self, cli_env: Path) -> None:
+        path = self.write(cli_env, "date,category,amount\n2026-11-10,pets,100\n")
+
+        assert "Unknown category in" in run("import", path, ok=False)
+
+        dry = run("import", path, "--create-categories", "--dry-run")
+        assert "Dry run: 1 expense would be imported (would create categories: pets)" in dry
+        assert "No expenses found." in run("list")
+
+        assert "Imported 1 expense (created categories: pets)" in run(
+            "import", path, "--create-categories"
+        )
+
+    def test_skip_duplicates(self, cli_env: Path) -> None:
+        path = self.write(cli_env, "date,category,amount\n2026-11-10,food,100\n2026-11-11,food,5\n")
+        run("import", path)
+
+        output = run("import", path, "--skip-duplicates")
+
+        assert "Imported 0 expenses (2 duplicates skipped)" in output
+        assert "2 expenses" in run("list")
+
+    @pytest.mark.parametrize(
+        ("content", "message"),
+        [
+            ("", "The file is empty"),
+            ("a,b\n1,2\n", "Missing columns: date, category, amount"),
+        ],
+    )
+    def test_unusable_file(self, cli_env: Path, content: str, message: str) -> None:
+        assert message in run("import", self.write(cli_env, content), ok=False)
+
+    def test_missing_file(self, cli_env: Path) -> None:
+        assert "File not found" in run("import", str(cli_env / "nope.csv"), ok=False)
+
+    def test_missing_argument(self) -> None:
+        assert "Missing argument" in run("import", ok=False)

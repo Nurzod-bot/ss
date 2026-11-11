@@ -1,3 +1,4 @@
+import sqlite3
 from datetime import UTC, date, datetime
 
 import pytest
@@ -129,6 +130,31 @@ class TestExpenses:
 
         assert expense.amount == huge
         assert isinstance(expense.amount, int)
+
+    def test_add_many(self, categories: CategoryRepository, expenses: ExpenseRepository) -> None:
+        food_id = category_id(categories, "food")
+
+        count = expenses.add_many(
+            [(100, food_id, "a", date(2026, 11, 1)), (200, food_id, "b", date(2026, 11, 2))]
+        )
+
+        assert count == 2
+        assert [(e.amount, e.note) for e in expenses.find()] == [(200, "b"), (100, "a")]
+
+    def test_add_many_is_atomic(
+        self, categories: CategoryRepository, expenses: ExpenseRepository
+    ) -> None:
+        food_id = category_id(categories, "food")
+
+        with pytest.raises(sqlite3.IntegrityError):
+            expenses.add_many(
+                [(100, food_id, "ok", date(2026, 11, 1)), (-1, food_id, "bad", date(2026, 11, 2))]
+            )
+
+        assert expenses.find() == []
+
+    def test_add_many_with_no_rows(self, expenses: ExpenseRepository) -> None:
+        assert expenses.add_many([]) == 0
 
     def test_get_missing_returns_none(self, expenses: ExpenseRepository) -> None:
         assert expenses.get(1) is None

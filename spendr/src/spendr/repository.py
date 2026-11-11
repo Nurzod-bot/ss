@@ -5,6 +5,7 @@ constraints are a safety net, not the place where user errors are reported.
 """
 
 import sqlite3
+from collections.abc import Sequence
 from datetime import UTC, date, datetime
 
 from spendr.errors import CategoryInUseError, DuplicateError, NotFoundError
@@ -144,6 +145,20 @@ class ExpenseRepository:
             )
         assert cursor.lastrowid is not None
         return self._require(cursor.lastrowid)
+
+    def add_many(self, rows: Sequence[tuple[int, int, str, date]]) -> int:
+        """Insert ``(amount, category_id, note, spent_on)`` rows in one transaction."""
+        created_at = datetime.now(UTC).isoformat(timespec="seconds")
+        with self._conn:
+            self._conn.executemany(
+                "INSERT INTO expenses (amount, category_id, note, spent_on, created_at) "
+                "VALUES (?, ?, ?, ?, ?)",
+                [
+                    (amount, category_id, note, spent_on.isoformat(), created_at)
+                    for amount, category_id, note, spent_on in rows
+                ],
+            )
+        return len(rows)
 
     def get(self, expense_id: int) -> Expense | None:
         row = self._conn.execute(f"{_EXPENSE_SELECT} WHERE e.id = ?", (expense_id,)).fetchone()

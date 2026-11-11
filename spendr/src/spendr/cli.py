@@ -4,6 +4,7 @@ business logic lives in :mod:`spendr.services`."""
 from collections.abc import Iterator
 from contextlib import closing, contextmanager
 from dataclasses import dataclass
+from pathlib import Path
 from typing import Annotated
 
 import typer
@@ -23,6 +24,7 @@ from spendr.formatting import (
     summary_table,
 )
 from spendr.services import BudgetService, CategoryService, ExpenseService, SummaryService
+from spendr.transfer import ExportFormat, TransferService, write_text
 
 app = typer.Typer(
     name="spendr",
@@ -53,6 +55,7 @@ class Session:
     categories: CategoryService
     summaries: SummaryService
     budgets: BudgetService
+    transfer: TransferService
 
 
 @contextmanager
@@ -61,7 +64,8 @@ def friendly_errors() -> Iterator[None]:
     try:
         yield
     except SpendrError as exc:
-        err_console.print(f"[bold red]Error:[/] {escape(str(exc))}")
+        # soft_wrap keeps long file paths in one piece so they stay copyable.
+        err_console.print(f"[bold red]Error:[/] {escape(str(exc))}", soft_wrap=True)
         raise typer.Exit(code=1) from None
 
 
@@ -77,6 +81,7 @@ def session() -> Iterator[Session]:
                 categories=CategoryService(conn),
                 summaries=SummaryService(conn),
                 budgets=BudgetService(conn),
+                transfer=TransferService(conn),
             )
 
 
@@ -200,6 +205,87 @@ def summary(
         console.print(summary_table(result, s.currency))
         console.print()
         console.print(summary_chart(result))
+
+
+@app.command()
+def export(
+    fmt: Annotated[
+        ExportFormat, typer.Option("--format", "-f", help="File format.")
+    ] = ExportFormat.CSV,
+    output: Annotated[
+        Path | None,
+        typer.Option("--output", "-o", help="File to write. Prints to the terminal if omitted."),
+    ] = None,
+    force: Annotated[bool, typer.Option("--force", help="Overwrite an existing file.")] = False,
+    category: Annotated[
+        str | None, typer.Option("--category", "-c", help="Only this category.")
+    ] = None,
+    date_from: Annotated[
+        str | None, typer.Option("--from", metavar="YYYY-MM-DD", help="On or after this date.")
+    ] = None,
+    date_to: Annotated[
+        str | None, typer.Option("--to", metavar="YYYY-MM-DD", help="On or before this date.")
+    ] = None,
+    month: Annotated[
+        str | None, typer.Option("--month", "-m", metavar="YYYY-MM", help="Only this month.")
+    ] = None,
+) -> None:
+    """Export expenses to CSV or JSON, oldest first."""
+    with session() as s:
+        text, count = s.transfer.export(
+            fmt, category=category, date_from=date_from, date_to=date_to, month=month
+        )
+        if output is None:
+            typer.echo(text, nl=False)
+            return
+        write_text(output, text, overwrite=force)
+        console.print(
+            f"[green]Exported[/] {count} expense{'s' if count != 1 else ''} "
+            f"to {escape(str(output))}",
+            highlight=False,
+            soft_wrap=True,
+        )
+
+
+@app.command("import")
+def import_expenses(
+    file: Annotated[
+        Path, typer.Argument(help="CSV file with date, category, amount and optional note.")
+    ],
+    create_categories: Annotated[
+        bool, typer.Option("--create-categories", help="Add categories that do not exist yet.")
+    ] = False,
+    skip_duplicates: Annotated[
+        bool,
+        typer.Option("--skip-duplicates", help="Skip rows identical to an existing expense."),
+    ] = False,
+    dry_run: Annotated[
+        bool, typer.Option("--dry-run", help="Check the file without importing anything.")
+    ] = False,
+) -> None:
+    """Import expenses from a CSV file. Nothing is imported if any row is invalid."""
+    with session() as s:
+        result = s.transfer.import_csv(
+            file,
+            create_categories=create_categories,
+            skip_duplicates=skip_duplicates,
+            dry_run=dry_run,
+        )
+        plural = "s" if result.imported != 1 else ""
+        if result.dry_run:
+            message = f"[yellow]Dry run:[/] {result.imported} expense{plural} would be imported"
+        else:
+            message = f"[green]Imported[/] {result.imported} expense{plural}"
+        details = []
+        if result.skipped_duplicates:
+            details.append(f"{result.skipped_duplicates} duplicates skipped")
+        if result.created_categories:
+            verb = "would create" if result.dry_run else "created"
+            names = ", ".join(result.created_categories)
+            details.append(f"{verb} categories: {escape(names)}")
+        if details:
+            message += f" ({'; '.join(details)})"
+        console.print(message, highlight=False)
 
 
 @category_app.command("list")
