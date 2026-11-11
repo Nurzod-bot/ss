@@ -10,6 +10,9 @@ from datetime import date
 
 from spendr.errors import CategoryInUseError, NotFoundError, ValidationError
 from spendr.models import (
+    Budget,
+    BudgetLine,
+    BudgetReport,
     Category,
     CategoryUsage,
     Expense,
@@ -17,7 +20,7 @@ from spendr.models import (
     Summary,
     SummaryRow,
 )
-from spendr.repository import CategoryRepository, ExpenseRepository
+from spendr.repository import BudgetRepository, CategoryRepository, ExpenseRepository
 
 MAX_AMOUNT = 2**63 - 1  # largest integer SQLite can store
 MAX_NOTE_LENGTH = 200
@@ -251,3 +254,80 @@ class SummaryService:
             total=grand_total,
             count=sum(item.count for item in totals),
         )
+
+
+class BudgetService:
+    def __init__(self, conn: sqlite3.Connection) -> None:
+        self._budgets = BudgetRepository(conn)
+        self._categories = CategoryRepository(conn)
+        self._expenses = ExpenseRepository(conn)
+
+    def set(
+        self, category: str, amount: str, month: str | None = None
+    ) -> tuple[Budget, int | None]:
+        """Create or change a category budget. Returns it with the previous amount."""
+        month = _month_or_current(month)
+        category_id = find_category(self._categories, category).id
+        new_amount = parse_amount(amount)
+        previous = self._budgets.get(category_id, month)
+        budget = self._budgets.set(category_id, month, new_amount)
+        return budget, previous.amount if previous else None
+
+    def remove(self, category: str, month: str | None = None) -> Budget:
+        month = _month_or_current(month)
+        found = find_category(self._categories, category)
+        budget = self._budgets.get(found.id, month)
+        if budget is None:
+            raise NotFoundError(f"No budget set for '{found.name}' in {month}.")
+        self._budgets.remove(found.id, month)
+        return budget
+
+    def set_total(self, amount: str, month: str | None = None) -> tuple[str, int, int | None]:
+        """Create or change the overall monthly budget.
+
+        Returns the month, the new amount and the previous amount.
+        """
+        month = _month_or_current(month)
+        new_amount = parse_amount(amount)
+        previous = self._budgets.get_total(month)
+        self._budgets.set_total(month, new_amount)
+        return month, new_amount, previous
+
+    def remove_total(self, month: str | None = None) -> tuple[str, int]:
+        month = _month_or_current(month)
+        amount = self._budgets.get_total(month)
+        if amount is None:
+            raise NotFoundError(f"No overall budget set for {month}.")
+        self._budgets.remove_total(month)
+        return month, amount
+
+    def status(self, month: str | None = None, today: date | None = None) -> BudgetReport:
+        """Compare a month's spending with its category and overall budgets."""
+        today = today or date.today()
+        month = parse_month(month) if month is not None else today.strftime("%Y-%m")
+        first_day, last_day = month_range(month)
+        budgets = self._budgets.list_for_month(month)
+        totals = self._expenses.totals_by_category(first_day, last_day)
+        spent_by_category = {item.category_id: item.total for item in totals}
+        budgeted_ids = {budget.category_id for budget in budgets}
+        is_current = first_day <= today <= last_day
+        return BudgetReport(
+            month=month,
+            lines=[
+                BudgetLine(
+                    category=budget.category,
+                    budget=budget.amount,
+                    spent=spent_by_category.get(budget.category_id, 0),
+                )
+                for budget in budgets
+            ],
+            unbudgeted=[item for item in totals if item.category_id not in budgeted_ids],
+            overall_budget=self._budgets.get_total(month),
+            total_spent=sum(item.total for item in totals),
+            days_left=(last_day - today).days + 1 if is_current else None,
+            is_past=last_day < today,
+        )
+
+
+def _month_or_current(month: str | None) -> str:
+    return parse_month(month) if month is not None else current_month()

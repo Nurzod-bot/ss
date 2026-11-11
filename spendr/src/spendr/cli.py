@@ -13,13 +13,16 @@ from rich.markup import escape
 from spendr import __version__, config, db
 from spendr.errors import SpendrError
 from spendr.formatting import (
+    budget_highlights,
+    budget_table,
     categories_table,
     describe_expense,
     expenses_table,
+    format_amount,
     summary_chart,
     summary_table,
 )
-from spendr.services import CategoryService, ExpenseService, SummaryService
+from spendr.services import BudgetService, CategoryService, ExpenseService, SummaryService
 
 app = typer.Typer(
     name="spendr",
@@ -31,8 +34,10 @@ app = typer.Typer(
 )
 
 category_app = typer.Typer(help="Manage expense categories.", no_args_is_help=True)
+budget_app = typer.Typer(help="Set budgets and track spending against them.", no_args_is_help=True)
 config_app = typer.Typer(help="Show or change settings.", no_args_is_help=True)
 app.add_typer(category_app, name="category")
+app.add_typer(budget_app, name="budget")
 app.add_typer(config_app, name="config")
 
 console = Console()
@@ -47,6 +52,7 @@ class Session:
     expenses: ExpenseService
     categories: CategoryService
     summaries: SummaryService
+    budgets: BudgetService
 
 
 @contextmanager
@@ -70,6 +76,7 @@ def session() -> Iterator[Session]:
                 expenses=ExpenseService(conn),
                 categories=CategoryService(conn),
                 summaries=SummaryService(conn),
+                budgets=BudgetService(conn),
             )
 
 
@@ -233,6 +240,89 @@ def category_remove(
     with session() as s:
         category = s.categories.remove(name)
         console.print(f"[green]Removed[/] category '{escape(category.name)}'")
+
+
+MonthOption = Annotated[
+    str | None,
+    typer.Option("--month", "-m", metavar="YYYY-MM", help="Defaults to the current month."),
+]
+
+
+def _changed(label: str, amount: int, previous: int | None, currency: str) -> str:
+    """Message for a budget that was created, changed or left as it was."""
+    new = format_amount(amount, currency)
+    if previous is None:
+        return f"[green]Set[/] {label} to {new}"
+    if previous == amount:
+        return f"{label[0].upper()}{label[1:]} is already {new}"
+    return f"[green]Changed[/] {label} from {format_amount(previous, currency)} to {new}"
+
+
+@budget_app.command("set", context_settings={"ignore_unknown_options": True})
+def budget_set(
+    category: Annotated[str, typer.Argument(help="Category to budget for.")],
+    amount: Annotated[str, typer.Argument(help="Limit for the month, e.g. 1500000.")],
+    month: MonthOption = None,
+) -> None:
+    """Set a category's budget for a month. Run it again to change the amount."""
+    with session() as s:
+        budget, previous = s.budgets.set(category, amount, month)
+        label = f"{escape(budget.category)} budget for {budget.month}"
+        console.print(_changed(label, budget.amount, previous, s.currency))
+
+
+@budget_app.command("total", context_settings={"ignore_unknown_options": True})
+def budget_total(
+    amount: Annotated[str, typer.Argument(help="Overall limit for the month, e.g. 5000000.")],
+    month: MonthOption = None,
+) -> None:
+    """Set the overall budget for a month, independent of the category budgets."""
+    with session() as s:
+        target, new_amount, previous = s.budgets.set_total(amount, month)
+        console.print(_changed(f"overall budget for {target}", new_amount, previous, s.currency))
+
+
+@budget_app.command("remove")
+def budget_remove(
+    category: Annotated[
+        str | None, typer.Argument(help="Category whose budget to remove.", show_default=False)
+    ] = None,
+    total: Annotated[
+        bool, typer.Option("--total", help="Remove the overall budget instead.")
+    ] = False,
+    month: MonthOption = None,
+) -> None:
+    """Remove a category budget, or the overall budget with --total."""
+    with session() as s:
+        if total == (category is not None):
+            err_console.print("[bold red]Error:[/] Give either a category or --total.")
+            raise typer.Exit(code=1)
+        if category is not None:
+            budget = s.budgets.remove(category, month)
+            what = f"{escape(budget.category)} budget for {budget.month}"
+            amount = budget.amount
+        else:
+            target, amount = s.budgets.remove_total(month)
+            what = f"overall budget for {target}"
+        console.print(f"[green]Removed[/] {what} ({format_amount(amount, s.currency)})")
+
+
+@budget_app.command("status")
+def budget_status(month: MonthOption = None) -> None:
+    """Show spent versus budget, with savings and warnings highlighted."""
+    with session() as s:
+        report = s.budgets.status(month)
+        if report.is_empty:
+            console.print(
+                f"No budgets set for {report.month}. Start with:\n"
+                "  spendr budget set CATEGORY AMOUNT\n"
+                "  spendr budget total AMOUNT",
+                highlight=False,
+            )
+            return
+        if report.lines:
+            console.print(budget_table(report, s.currency))
+        console.print(budget_highlights(report, s.currency))
 
 
 @config_app.command("show")

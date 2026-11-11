@@ -306,3 +306,21 @@ class TestBudgets:
     ) -> None:
         with pytest.raises(NotFoundError, match="No budget"):
             budgets.remove(category_id(categories, "food"), "2026-11")
+
+    def test_overall_budget_set_get_replace_remove(self, budgets: BudgetRepository) -> None:
+        assert budgets.get_total("2026-11") is None
+
+        budgets.set_total("2026-11", 5_000_000)
+        budgets.set_total("2026-12", 1)
+        assert budgets.get_total("2026-11") == 5_000_000
+
+        budgets.set_total("2026-11", 4_000_000)
+        assert budgets.get_total("2026-11") == 4_000_000
+
+        budgets.remove_total("2026-11")
+        assert budgets.get_total("2026-11") is None
+        assert budgets.get_total("2026-12") == 1
+
+    def test_remove_missing_overall_budget(self, budgets: BudgetRepository) -> None:
+        with pytest.raises(NotFoundError, match="No overall budget set for 2026-11"):
+            budgets.remove_total("2026-11")

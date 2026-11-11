@@ -5,7 +5,10 @@ import pytest
 
 from spendr import db, services
 from spendr.errors import CategoryInUseError, DuplicateError, NotFoundError, ValidationError
-from spendr.services import CategoryService, ExpenseService, SummaryService
+from spendr.models import BudgetState
+from spendr.services import BudgetService, CategoryService, ExpenseService, SummaryService
+
+NOV_11 = date(2026, 11, 11)
 
 
 @pytest.fixture
@@ -21,6 +24,11 @@ def categories(conn: sqlite3.Connection) -> CategoryService:
 @pytest.fixture
 def summaries(conn: sqlite3.Connection) -> SummaryService:
     return SummaryService(conn)
+
+
+@pytest.fixture
+def budgets(conn: sqlite3.Connection) -> BudgetService:
+    return BudgetService(conn)
 
 
 class TestParseAmount:
@@ -376,3 +384,161 @@ class TestSummaryService:
     def test_invalid_month(self, summaries: SummaryService) -> None:
         with pytest.raises(ValidationError, match="Invalid month"):
             summaries.for_month("2026-13")
+
+
+class TestBudgetService:
+    def test_set_creates_then_edits(self, budgets: BudgetService) -> None:
+        created, before = budgets.set("Food", "1 500 000", "2026-11")
+        edited, previous = budgets.set("food", "1200000", "2026-11")
+
+        assert (created.category, created.month, created.amount) == ("food", "2026-11", 1_500_000)
+        assert before is None
+        assert edited.amount == 1_200_000
+        assert previous == 1_500_000
+
+    def test_set_defaults_to_current_month(self, budgets: BudgetService) -> None:
+        budget, _ = budgets.set("food", "100")
+
+        assert budget.month == services.current_month()
+
+    @pytest.mark.parametrize(
+        ("args", "error", "message"),
+        [
+            (("pets", "100", "2026-11"), NotFoundError, "Unknown category"),
+            (("food", "0", "2026-11"), ValidationError, "greater than zero"),
+            (("food", "-100", "2026-11"), ValidationError, "greater than zero"),
+            (("food", "1.5", "2026-11"), ValidationError, "Invalid amount"),
+            (("food", "100", "2026-13"), ValidationError, "Invalid month"),
+        ],
+    )
+    def test_set_invalid(
+        self,
+        budgets: BudgetService,
+        args: tuple[str, str, str],
+        error: type[Exception],
+        message: str,
+    ) -> None:
+        with pytest.raises(error, match=message):
+            budgets.set(*args)
+
+        assert budgets.status("2026-11").is_empty
+
+    def test_remove(self, budgets: BudgetService) -> None:
+        budgets.set("food", "100", "2026-11")
+
+        assert budgets.remove("food", "2026-11").amount == 100
+        assert budgets.status("2026-11").is_empty
+
+    def test_remove_missing(self, budgets: BudgetService) -> None:
+        with pytest.raises(NotFoundError, match="No budget set for 'food' in 2026-11"):
+            budgets.remove("food", "2026-11")
+        with pytest.raises(NotFoundError, match="Unknown category"):
+            budgets.remove("pets", "2026-11")
+
+    def test_overall_budget_set_edit_remove(self, budgets: BudgetService) -> None:
+        assert budgets.set_total("5000000", "2026-11") == ("2026-11", 5_000_000, None)
+        assert budgets.set_total("4000000", "2026-11") == ("2026-11", 4_000_000, 5_000_000)
+        assert budgets.status("2026-11").overall_budget == 4_000_000
+
+        assert budgets.remove_total("2026-11") == ("2026-11", 4_000_000)
+        assert budgets.status("2026-11").overall_budget is None
+
+    def test_overall_budget_invalid(self, budgets: BudgetService) -> None:
+        with pytest.raises(ValidationError, match="greater than zero"):
+            budgets.set_total("0", "2026-11")
+        with pytest.raises(ValidationError, match="Invalid month"):
+            budgets.set_total("100", "nov")
+        with pytest.raises(NotFoundError, match="No overall budget set for 2026-11"):
+            budgets.remove_total("2026-11")
+
+    def test_status_empty(self, budgets: BudgetService) -> None:
+        report = budgets.status("2026-11", today=NOV_11)
+
+        assert report.is_empty
+        assert report.lines == []
+        assert report.total_spent == 0
+
+    def test_status_compares_spending_with_budgets(
+        self, budgets: BudgetService, service: ExpenseService
+    ) -> None:
+        budgets.set("food", "1000", "2026-11")
+        budgets.set("housing", "5000", "2026-11")
+        budgets.set("health", "300", "2026-11")
+        budgets.set("food", "1", "2026-12")
+        service.add("950", "food", "", "2026-11-05")
+        service.add("5001", "housing", "", "2026-11-01")
+        service.add("70", "transport", "", "2026-11-03")
+        service.add("999", "food", "", "2026-10-31")
+
+        report = budgets.status("2026-11", today=NOV_11)
+
+        assert [(line.category, line.budget, line.spent, line.state) for line in report.lines] == [
+            ("food", 1000, 950, BudgetState.WARNING),
+            ("health", 300, 0, BudgetState.OK),
+            ("housing", 5000, 5001, BudgetState.OVER),
+        ]
+        assert [(item.category, item.total) for item in report.unbudgeted] == [("transport", 70)]
+        assert report.total_spent == 6021
+        assert report.overall_budget is None
+        assert report.limit == 6300
+
+    def test_overall_budget_is_independent_of_category_budgets(
+        self, budgets: BudgetService, service: ExpenseService
+    ) -> None:
+        budgets.set("food", "1000", "2026-11")
+        budgets.set_total("10000", "2026-11")
+        service.add("400", "food", "", "2026-11-05")
+        service.add("600", "transport", "", "2026-11-05")
+
+        report = budgets.status("2026-11", today=NOV_11)
+
+        assert report.limit == 10_000
+        assert report.remaining == 9_000
+        assert report.unallocated == 9_000
+        assert report.unbudgeted_spent == 600
+
+    def test_status_with_only_overall_budget(
+        self, budgets: BudgetService, service: ExpenseService
+    ) -> None:
+        budgets.set_total("1000", "2026-11")
+        service.add("400", "food", "", "2026-11-05")
+
+        report = budgets.status("2026-11", today=NOV_11)
+
+        assert not report.is_empty
+        assert report.lines == []
+        assert report.remaining == 600
+
+    @pytest.mark.parametrize(
+        ("today", "days_left", "is_past"),
+        [
+            (date(2026, 11, 1), 30, False),
+            (NOV_11, 20, False),
+            (date(2026, 11, 30), 1, False),
+            (date(2026, 12, 1), None, True),
+            (date(2026, 10, 31), None, False),
+        ],
+    )
+    def test_status_days_left(
+        self, budgets: BudgetService, today: date, days_left: int | None, is_past: bool
+    ) -> None:
+        report = budgets.status("2026-11", today=today)
+
+        assert report.days_left == days_left
+        assert report.is_past is is_past
+
+    def test_status_defaults_to_month_of_today(self, budgets: BudgetService) -> None:
+        assert budgets.status(today=date(2025, 2, 10)).month == "2025-02"
+        assert budgets.status().month == services.current_month()
+
+    def test_status_invalid_month(self, budgets: BudgetService) -> None:
+        with pytest.raises(ValidationError, match="Invalid month"):
+            budgets.status("2026-00")
+
+    def test_renaming_category_keeps_budget(
+        self, budgets: BudgetService, categories: CategoryService
+    ) -> None:
+        budgets.set("food", "1000", "2026-11")
+        categories.rename("food", "groceries")
+
+        assert [line.category for line in budgets.status("2026-11").lines] == ["groceries"]

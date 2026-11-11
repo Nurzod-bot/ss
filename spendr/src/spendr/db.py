@@ -54,6 +54,15 @@ MIGRATIONS: tuple[tuple[str, ...], ...] = (
         "INSERT INTO categories (name) VALUES "
         + ", ".join(f"('{name}')" for name in DEFAULT_CATEGORIES),
     ),
+    # 2: one overall spending limit per month, independent of the category budgets
+    (
+        """
+        CREATE TABLE monthly_budgets (
+            month  TEXT    PRIMARY KEY CHECK (month || '-01' IS date(month || '-01')),
+            amount INTEGER NOT NULL CHECK (typeof(amount) = 'integer' AND amount > 0)
+        ) WITHOUT ROWID
+        """,
+    ),
 )
 
 SCHEMA_VERSION = len(MIGRATIONS)

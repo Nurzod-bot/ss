@@ -114,3 +114,38 @@ def test_in_memory_database_is_supported() -> None:
 
     assert db.schema_version(connection) == db.SCHEMA_VERSION
     connection.close()
+
+
+def test_existing_database_is_upgraded_without_losing_data(
+    db_file: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    latest = db.MIGRATIONS
+    monkeypatch.setattr(db, "MIGRATIONS", latest[:1])
+    monkeypatch.setattr(db, "SCHEMA_VERSION", 1)
+    old = db.connect(db_file)
+    with old:
+        old.execute(
+            "INSERT INTO expenses (amount, category_id, spent_on, created_at) "
+            "VALUES (100, 1, '2026-11-10', '2026-11-10T00:00:00+00:00')"
+        )
+    assert db.schema_version(old) == 1
+    old.close()
+
+    monkeypatch.setattr(db, "MIGRATIONS", latest)
+    monkeypatch.setattr(db, "SCHEMA_VERSION", len(latest))
+    upgraded = db.connect(db_file)
+    version = db.schema_version(upgraded)
+    amount = upgraded.execute("SELECT amount FROM expenses").fetchone()[0]
+    upgraded.execute("INSERT INTO monthly_budgets (month, amount) VALUES ('2026-11', 5)")
+    upgraded.close()
+
+    assert version == len(latest)
+    assert amount == 100
+
+
+@pytest.mark.parametrize(("month", "amount"), [("2026-13", 100), ("2026-11", 0), ("2026-11", 1.5)])
+def test_schema_rejects_invalid_overall_budgets(
+    conn: sqlite3.Connection, month: str, amount: object
+) -> None:
+    with pytest.raises(sqlite3.IntegrityError):
+        conn.execute("INSERT INTO monthly_budgets (month, amount) VALUES (?, ?)", (month, amount))

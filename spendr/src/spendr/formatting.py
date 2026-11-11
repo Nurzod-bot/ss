@@ -2,13 +2,20 @@
 
 from collections.abc import Sequence
 
+from rich.panel import Panel
 from rich.table import Table
 from rich.text import Text
 
-from spendr.models import CategoryUsage, Expense, Summary
+from spendr.models import BudgetReport, BudgetState, CategoryUsage, Expense, Summary
 
 BAR_WIDTH = 30
 BAR_COLORS = ("cyan", "magenta", "green", "yellow", "blue", "red")
+METER_WIDTH = 10
+STATE_STYLES = {
+    BudgetState.OK: "green",
+    BudgetState.WARNING: "red",
+    BudgetState.OVER: "bold red",
+}
 
 
 def format_amount(amount: int, currency: str = "") -> str:
@@ -112,3 +119,103 @@ def summary_chart(summary: Summary) -> Table:
         bar = Text("█" * bar_length(row.total, largest), style=BAR_COLORS[index % len(BAR_COLORS)])
         chart.add_row(Text(row.category), bar, format_percent(row.percent))
     return chart
+
+
+def usage_meter(spent: int, budget: int, width: int = METER_WIDTH) -> str:
+    """A fixed-width gauge, e.g. ``███████░░░``, that is full at or above budget."""
+    filled = min(width, bar_length(spent, budget, width))
+    return "█" * filled + "░" * (width - filled)
+
+
+def budget_table(report: BudgetReport, currency: str) -> Table:
+    """Spent versus budget for each budgeted category; red from 90% upwards."""
+    lines = report.lines
+    spent = sum(line.spent for line in lines)
+    table = Table(
+        title=f"Budgets for {report.month} ({currency})", header_style="bold", show_footer=True
+    )
+    table.add_column("Category", footer="Total", style="cyan")
+    table.add_column(
+        "Budget", footer=format_amount(report.category_budget_total), justify="right", no_wrap=True
+    )
+    table.add_column("Spent", footer=format_amount(spent), justify="right", no_wrap=True)
+    table.add_column(
+        "Remaining",
+        footer=format_amount(report.category_budget_total - spent),
+        justify="right",
+        no_wrap=True,
+    )
+    table.add_column("Used", justify="right", no_wrap=True)
+    table.add_column("Status", no_wrap=True)
+    for line in lines:
+        style = STATE_STYLES[line.state]
+        table.add_row(
+            Text(line.category),
+            format_amount(line.budget),
+            format_amount(line.spent),
+            Text(format_amount(line.remaining), style=style),
+            Text(f"{usage_meter(line.spent, line.budget)} {line.percent_used:.0f}%", style=style),
+            Text(line.state.value, style=style),
+        )
+    return table
+
+
+def budget_highlights(report: BudgetReport, currency: str) -> Panel:
+    """The headline figures of a month: savings, pace and anything that needs attention."""
+    grid = Table.grid(padding=(0, 2))
+    grid.add_column(style="bold", no_wrap=True)
+    grid.add_column()
+
+    def money(amount: int) -> str:
+        return format_amount(amount, currency)
+
+    limit, remaining, state = report.limit, report.remaining, report.state
+    if limit is not None and remaining is not None and state is not None:
+        label = "Overall budget" if report.overall_budget is not None else "Category budgets"
+        grid.add_row(label, money(limit))
+        share = report.total_spent * 100 / limit
+        grid.add_row(
+            "Spent", Text(f"{money(report.total_spent)} ({share:.0f}%)", style=STATE_STYLES[state])
+        )
+        if remaining < 0:
+            grid.add_row("Over budget by", Text(money(-remaining), style="bold red"))
+        else:
+            grid.add_row(
+                "Saved" if report.is_past else "Left to spend",
+                Text(money(remaining), style="bold green"),
+            )
+    else:
+        grid.add_row("Spent", money(report.total_spent))
+
+    allowance = report.daily_allowance
+    if allowance is not None and report.days_left:
+        days = f"{report.days_left} day{'s' if report.days_left != 1 else ''}"
+        grid.add_row("Daily allowance", f"{money(allowance)} per day for the next {days}")
+
+    unallocated = report.unallocated
+    if unallocated is not None and unallocated > 0 and report.lines:
+        grid.add_row("Unallocated", f"{money(unallocated)} not assigned to any category")
+    elif unallocated is not None and unallocated < 0:
+        grid.add_row(
+            "Over-allocated",
+            Text(f"category budgets exceed the overall budget by {money(-unallocated)}", "yellow"),
+        )
+
+    if report.unbudgeted and report.lines:
+        names = ", ".join(item.category for item in report.unbudgeted)
+        grid.add_row(
+            "Unbudgeted", Text(f"{money(report.unbudgeted_spent)} spent on {names}", "yellow")
+        )
+
+    over = [line.category for line in report.lines if line.state is BudgetState.OVER]
+    near = [line.category for line in report.lines if line.state is BudgetState.WARNING]
+    if over:
+        grid.add_row("Over budget", Text(", ".join(over), style="bold red"))
+    if near:
+        grid.add_row("Above 90%", Text(", ".join(near), style="red"))
+
+    if report.overall_budget is None:
+        grid.add_row(
+            "Tip", Text("set an overall limit with: spendr budget total AMOUNT", style="dim")
+        )
+    return Panel(grid, title="Highlights", title_align="left", expand=False)

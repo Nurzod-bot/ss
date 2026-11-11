@@ -27,7 +27,7 @@ class TestApp:
     def test_help_lists_commands(self) -> None:
         output = run("--help")
 
-        for command in ("add", "list", "edit", "delete", "summary", "category", "config"):
+        for command in ("add", "list", "edit", "delete", "summary", "category", "budget", "config"):
             assert command in output
 
     def test_no_arguments_shows_help(self) -> None:
@@ -333,3 +333,114 @@ class TestConfig:
         (cli_env / "config.json").write_text("[]")
 
         assert "must contain a JSON object" in run("config", "show", ok=False)
+
+
+class TestBudget:
+    def test_set_then_edit(self) -> None:
+        first = run("budget", "set", "food", "1500000", "--month", "2026-11")
+        second = run("budget", "set", "food", "1200000", "--month", "2026-11")
+        third = run("budget", "set", "food", "1200000", "--month", "2026-11")
+
+        assert "Set food budget for 2026-11 to 1 500 000 UZS" in first
+        assert "Changed food budget for 2026-11 from 1 500 000 UZS to 1 200 000 UZS" in second
+        assert "Food budget for 2026-11 is already 1 200 000 UZS" in third
+
+    def test_set_defaults_to_current_month(self) -> None:
+        assert f"food budget for {date.today():%Y-%m}" in run("budget", "set", "food", "100")
+
+    @pytest.mark.parametrize(
+        ("args", "message"),
+        [
+            (["pets", "100"], "Unknown category 'pets'"),
+            (["food", "-100"], "greater than zero"),
+            (["food", "0"], "greater than zero"),
+            (["food", "lots"], "Invalid amount"),
+            (["food", "100", "--month", "2026-13"], "Invalid month"),
+        ],
+    )
+    def test_set_invalid(self, args: list[str], message: str) -> None:
+        assert message in run("budget", "set", *args, ok=False)
+
+    def test_overall_budget_set_then_edit(self) -> None:
+        first = run("budget", "total", "5000000", "-m", "2026-11")
+        second = run("budget", "total", "4000000", "-m", "2026-11")
+
+        assert "Set overall budget for 2026-11 to 5 000 000 UZS" in first
+        assert "Changed overall budget for 2026-11 from 5 000 000 UZS to 4 000 000 UZS" in second
+
+    def test_overall_budget_invalid(self) -> None:
+        assert "greater than zero" in run("budget", "total", "-1", ok=False)
+
+    def test_remove_category_budget(self) -> None:
+        run("budget", "set", "food", "100", "-m", "2026-11")
+
+        output = run("budget", "remove", "food", "-m", "2026-11")
+
+        assert "Removed food budget for 2026-11 (100 UZS)" in output
+        assert "No budgets set for 2026-11" in run("budget", "status", "-m", "2026-11")
+
+    def test_remove_overall_budget(self) -> None:
+        run("budget", "total", "100", "-m", "2026-11")
+
+        assert "Removed overall budget for 2026-11 (100 UZS)" in run(
+            "budget", "remove", "--total", "-m", "2026-11"
+        )
+
+    @pytest.mark.parametrize(
+        ("args", "message"),
+        [
+            ([], "Give either a category or --total"),
+            (["food", "--total"], "Give either a category or --total"),
+            (["food", "-m", "2026-11"], "No budget set for 'food' in 2026-11"),
+            (["--total", "-m", "2026-11"], "No overall budget set for 2026-11"),
+            (["pets"], "Unknown category"),
+        ],
+    )
+    def test_remove_invalid(self, args: list[str], message: str) -> None:
+        assert message in run("budget", "remove", *args, ok=False)
+
+    def test_status_without_budgets(self) -> None:
+        output = run("budget", "status", "--month", "2026-11")
+
+        assert "No budgets set for 2026-11" in output
+        assert "spendr budget set CATEGORY AMOUNT" in output
+
+    def test_status_shows_table_and_highlights(self) -> None:
+        run("budget", "set", "food", "175000", "-m", "2026-10")
+        run("budget", "set", "housing", "1200000", "-m", "2026-10")
+        run("budget", "total", "2000000", "-m", "2026-10")
+        run("add", "165000", "food", "-d", "2026-10-05")
+        run("add", "1250000", "housing", "-d", "2026-10-01")
+        run("add", "7000", "transport", "-d", "2026-10-03")
+
+        output = run("budget", "status", "--month", "2026-10")
+
+        assert "Budgets for 2026-10 (UZS)" in output
+        food = next(line for line in output.splitlines() if "food" in line and "│" in line)
+        assert "94%" in food and "near limit" in food
+        assert "over budget" in output
+        assert "Highlights" in output
+        assert "Saved" in output and "578 000 UZS" in output
+        assert "625 000 UZS not assigned to any category" in output
+        assert "7 000 UZS spent on transport" in output
+
+    def test_status_with_only_overall_budget(self) -> None:
+        run("budget", "total", "1000", "-m", "2026-10")
+        run("add", "1200", "food", "-d", "2026-10-05")
+
+        output = run("budget", "status", "-m", "2026-10")
+
+        assert "Budgets for" not in output
+        assert "Over budget by" in output and "200 UZS" in output
+
+    def test_status_defaults_to_current_month(self) -> None:
+        run("budget", "total", "1000")
+        run("add", "100", "food")
+
+        output = run("budget", "status")
+
+        assert "Left to spend" in output and "900 UZS" in output
+        assert "Daily allowance" in output
+
+    def test_status_invalid_month(self) -> None:
+        assert "Invalid month" in run("budget", "status", "-m", "soon", ok=False)

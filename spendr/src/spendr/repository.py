@@ -281,3 +281,24 @@ class BudgetRepository:
             )
         if cursor.rowcount == 0:
             raise NotFoundError(f"No budget set for that category in {month}.")
+
+    def get_total(self, month: str) -> int | None:
+        """The overall budget for a month, or ``None`` when none is set."""
+        row = self._conn.execute(
+            "SELECT amount FROM monthly_budgets WHERE month = ?", (month,)
+        ).fetchone()
+        return int(row["amount"]) if row else None
+
+    def set_total(self, month: str, amount: int) -> None:
+        with self._conn:
+            self._conn.execute(
+                "INSERT INTO monthly_budgets (month, amount) VALUES (?, ?) "
+                "ON CONFLICT (month) DO UPDATE SET amount = excluded.amount",
+                (month, amount),
+            )
+
+    def remove_total(self, month: str) -> None:
+        with self._conn:
+            cursor = self._conn.execute("DELETE FROM monthly_budgets WHERE month = ?", (month,))
+        if cursor.rowcount == 0:
+            raise NotFoundError(f"No overall budget set for {month}.")
