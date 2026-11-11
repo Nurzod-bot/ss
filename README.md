@@ -48,3 +48,7 @@ Data is saved in this browser on this device using local storage (`daylight-plan
 The previous timed planner is migrated automatically: its name and daily notes are carried forward, the complete original plan is retained in `previousPlan` for exports, and its original `daylight-planner-v1` storage key is left untouched. The new routine starts with unchecked habits, and its timer is always 30 minutes, including after migration. Unreadable stored data is never overwritten until the user explicitly backs it up and starts fresh.
 
 All artwork, fonts, and icons are bundled locally. No API keys or external services are required. The aviation artwork was generated for this app.
+
+## Also in this repository
+
+[**spendr**](spendr/) — a command-line expense tracker written in Python (Typer, Rich, SQLite). It has its own [README](spendr/README.md) with install and usage instructions.
